@@ -6,7 +6,6 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 
-
 namespace Services.Implements
 {
     public class TokenService : ITokenService
@@ -43,19 +42,18 @@ namespace Services.Implements
 
         private async Task<List<Claim>> GetClaimsAsync(User user)
         {
-            // Validate user object
             if (user == null)
                 return new List<Claim>();
 
             var claims = new List<Claim>
-                {
-                    new Claim(ClaimTypes.Name, user.UserName ?? string.Empty),
-                    new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
-                    new Claim(ClaimTypes.Email, user.Email ?? string.Empty),
-                    new Claim("FirstName", user.FirstName ?? string.Empty),
-                    new Claim("LastName", user.LastName ?? string.Empty),
-                    new Claim("Gender", user.Gender ?? string.Empty)
-                };
+            {
+                new Claim(ClaimTypes.Name, user.UserName ?? string.Empty),
+                new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+                new Claim(ClaimTypes.Email, user.Email ?? string.Empty),
+                new Claim("FirstName", user.FirstName ?? string.Empty),
+                new Claim("LastName", user.LastName ?? string.Empty),
+                new Claim("Gender", user.Gender ?? string.Empty)
+            };
 
             var roles = await _userManager.GetRolesAsync(user);
             claims.AddRange(roles.Select(role => new Claim(ClaimTypes.Role, role)));
@@ -65,12 +63,12 @@ namespace Services.Implements
 
         private JwtSecurityToken GenerateTokenOptions(SigningCredentials signingCredentials, List<Claim> claims)
         {
-            // Additional checks or logging can go here if desired
+            // Sử dụng DateTime.UtcNow thay cho DateTime.Now để đảm bảo tính nhất quán với UTC
             return new JwtSecurityToken(
                 issuer: _validIssuer,
                 audience: _validAudience,
                 claims: claims,
-                expires: DateTime.Now.AddMinutes(_expires),
+                expires: DateTime.UtcNow.AddMinutes(_expires),
                 signingCredentials: signingCredentials
             );
         }

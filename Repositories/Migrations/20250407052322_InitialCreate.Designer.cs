@@ -12,8 +12,8 @@ using Repositories;
 namespace Repositories.Migrations
 {
     [DbContext(typeof(BaseIdentityDbContext))]
-    [Migration("20250404153044_Initial")]
-    partial class Initial
+    [Migration("20250407052322_InitialCreate")]
+    partial class InitialCreate
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)

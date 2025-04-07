@@ -5,3 +5,5 @@ global using Repositories.WorkSeeds;
 global using Repositories.WorkSeeds.Implements;
 global using BusinessObjects;
 global using DTOs.UserDTOs.Identities;
+global using DTOs.UserDTOs.Request;
+global using Microsoft.AspNetCore.Identity;
