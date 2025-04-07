@@ -31,12 +31,13 @@ namespace Repositories.WorkSeeds
             Expression<Func<TEntity, bool>>? predicate = null,
             params Expression<Func<TEntity, object>>[] includes)
         {
-            IQueryable<TEntity> query = _dbSet;
+            // Apply AsNoTracking for better read performance
+            var query = _dbSet.AsNoTracking().AsQueryable();
 
-            if (predicate != null)
+            if (predicate is not null)
                 query = query.Where(predicate);
 
-            if (includes != null && includes.Any())
+            if (includes?.Any() == true)
             {
                 foreach (var include in includes)
                 {
@@ -49,31 +50,27 @@ namespace Repositories.WorkSeeds
 
         public async Task<TEntity?> GetByIdAsync(TKey id, params Expression<Func<TEntity, object>>[] includes)
         {
-            // Nếu không có include nào thì dùng FindAsync cho hiệu năng tốt hơn
+            // Use FindAsync if no includes for efficiency
             if (includes == null || includes.Length == 0)
-            {
                 return await _dbSet.FindAsync(id);
-            }
 
-            // Nếu có include, xây dựng query kèm include
-            IQueryable<TEntity> query = _dbSet;
+            // Build query with includes
+            var query = _dbSet.AsNoTracking().AsQueryable();
             foreach (var include in includes)
             {
                 query = query.Include(include);
             }
 
-            // Lấy thông tin metadata để tìm khóa chính của entity
+            // Dynamically build a predicate for the entity key
             var key = _context.Model.FindEntityType(typeof(TEntity))?.FindPrimaryKey();
             if (key == null || key.Properties.Count != 1)
                 throw new InvalidOperationException("Entity không có khóa chính duy nhất được hỗ trợ.");
 
             var keyProperty = key.Properties.First();
-
-            // Xây dựng biểu thức: entity => EF.Property<object>(entity, keyName) == id
             var parameter = Expression.Parameter(typeof(TEntity), "entity");
             var propertyAccess = Expression.Property(parameter, keyProperty.Name);
-            var equals = Expression.Equal(propertyAccess, Expression.Constant(id));
-            var lambda = Expression.Lambda<Func<TEntity, bool>>(equals, parameter);
+            var equalsExpression = Expression.Equal(propertyAccess, Expression.Constant(id));
+            var lambda = Expression.Lambda<Func<TEntity, bool>>(equalsExpression, parameter);
 
             return await query.FirstOrDefaultAsync(lambda);
         }

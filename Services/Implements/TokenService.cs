@@ -10,10 +10,11 @@ namespace Services.Implements
 {
     public class TokenService : ITokenService
     {
+        private static readonly JwtSecurityTokenHandler _tokenHandler = new();
         private readonly SymmetricSecurityKey _secretKey;
         private readonly string? _validIssuer;
         private readonly string? _validAudience;
-        private readonly double _expires;
+        readonly double _expires;
         private readonly UserManager<User> _userManager;
 
         public TokenService(IConfiguration configuration, UserManager<User> userManager)
@@ -36,26 +37,23 @@ namespace Services.Implements
             var randomNumber = new byte[64];
             using var rng = RandomNumberGenerator.Create();
             rng.GetBytes(randomNumber);
-
             return Convert.ToBase64String(randomNumber);
         }
 
         private async Task<List<Claim>> GetClaimsAsync(User user)
         {
-            if (user == null)
-                return new List<Claim>();
-
+            // Assuming the user is not null as it's been checked before calling this method.
             var claims = new List<Claim>
-            {
-                new Claim(ClaimTypes.Name, user.UserName ?? string.Empty),
-                new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
-                new Claim(ClaimTypes.Email, user.Email ?? string.Empty),
-                new Claim("FirstName", user.FirstName ?? string.Empty),
-                new Claim("LastName", user.LastName ?? string.Empty),
-                new Claim("Gender", user.Gender ?? string.Empty)
-            };
+                {
+                    new Claim(ClaimTypes.Name, user.UserName ?? string.Empty),
+                    new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+                    new Claim(ClaimTypes.Email, user.Email ?? string.Empty),
+                    new Claim("FirstName", user.FirstName ?? string.Empty),
+                    new Claim("LastName", user.LastName ?? string.Empty),
+                    new Claim("Gender", user.Gender ?? string.Empty)
+                };
 
-            var roles = await _userManager.GetRolesAsync(user);
+            var roles = await _userManager.GetRolesAsync(user).ConfigureAwait(false);
             claims.AddRange(roles.Select(role => new Claim(ClaimTypes.Role, role)));
 
             return claims;
@@ -63,7 +61,6 @@ namespace Services.Implements
 
         private JwtSecurityToken GenerateTokenOptions(SigningCredentials signingCredentials, List<Claim> claims)
         {
-            // Sử dụng DateTime.UtcNow thay cho DateTime.Now để đảm bảo tính nhất quán với UTC
             return new JwtSecurityToken(
                 issuer: _validIssuer,
                 audience: _validAudience,
@@ -79,9 +76,9 @@ namespace Services.Implements
                 return ApiResult<string>.Failure("User is null.");
 
             var signingCredentials = new SigningCredentials(_secretKey, SecurityAlgorithms.HmacSha256);
-            var claims = await GetClaimsAsync(user);
+            var claims = await GetClaimsAsync(user).ConfigureAwait(false);
             var tokenOptions = GenerateTokenOptions(signingCredentials, claims);
-            var token = new JwtSecurityTokenHandler().WriteToken(tokenOptions);
+            var token = _tokenHandler.WriteToken(tokenOptions);
 
             return ApiResult<string>.Success(token);
         }

@@ -21,41 +21,40 @@ namespace BaseIdentity.Application.Services
 
         public async Task<ApiResult<string>> ProcessGoogleLoginAsync()
         {
-            // Lấy thông tin external login từ Google
-            var info = await _signInManager.GetExternalLoginInfoAsync();
+            // Retrieve external login info from Google
+            var info = await _signInManager.GetExternalLoginInfoAsync().ConfigureAwait(false);
             if (info == null)
             {
-                return ApiResult<string>.Failure("Không lấy được thông tin từ Google.");
+                return ApiResult<string>.Failure("Unable to retrieve external login info from Google.");
             }
 
-            // Thử đăng nhập bằng external login
-            var signInResult = await _signInManager.ExternalLoginSignInAsync(
-                info.LoginProvider,
-                info.ProviderKey,
-                isPersistent: false);
+            // Attempt to sign in with the external login
+            var signInResult = await _signInManager
+                .ExternalLoginSignInAsync(info.LoginProvider, info.ProviderKey, isPersistent: false)
+                .ConfigureAwait(false);
 
-            User user = null;
+            User user;
             if (!signInResult.Succeeded)
             {
-                // Lấy email từ thông tin external
+                // Retrieve email from external login info
                 var email = info.Principal.FindFirstValue(ClaimTypes.Email);
                 if (string.IsNullOrEmpty(email))
                 {
-                    return ApiResult<string>.Failure("Email không tồn tại trong thông tin Google.");
+                    return ApiResult<string>.Failure("Email not present in Google account.");
                 }
 
-                // Kiểm tra xem user đã tồn tại hay chưa
-                user = await _userManager.FindByEmailAsync(email);
+                // Check if the user already exists
+                user = await _userManager.FindByEmailAsync(email).ConfigureAwait(false);
                 if (user == null)
                 {
-                    // Tạo user mới nếu chưa tồn tại
+                    // Create a new user if it does not exist
                     user = new User
                     {
                         UserName = email,
                         Email = email
                     };
 
-                    var createResult = await _userManager.CreateAsync(user);
+                    var createResult = await _userManager.CreateAsync(user).ConfigureAwait(false);
                     if (!createResult.Succeeded)
                     {
                         var errorMsg = string.Join(", ", createResult.Errors.Select(e => e.Description));
@@ -63,29 +62,29 @@ namespace BaseIdentity.Application.Services
                     }
                 }
 
-                // Thêm external login cho user nếu chưa có
-                var addLoginResult = await _userManager.AddLoginAsync(user, info);
+                // Associate the external login with the user
+                var addLoginResult = await _userManager.AddLoginAsync(user, info).ConfigureAwait(false);
                 if (!addLoginResult.Succeeded)
                 {
                     var errorMsg = string.Join(", ", addLoginResult.Errors.Select(e => e.Description));
                     return ApiResult<string>.Failure(errorMsg);
                 }
 
-                // Đăng nhập user
-                await _signInManager.SignInAsync(user, isPersistent: false);
+                // Sign in the user
+                await _signInManager.SignInAsync(user, isPersistent: false).ConfigureAwait(false);
             }
             else
             {
-                // Nếu đăng nhập external thành công, lấy user đã liên kết
-                user = await _userManager.FindByLoginAsync(info.LoginProvider, info.ProviderKey);
+                // If external sign in succeeded, get the linked user
+                user = await _userManager.FindByLoginAsync(info.LoginProvider, info.ProviderKey).ConfigureAwait(false);
                 if (user == null)
                 {
-                    return ApiResult<string>.Failure("Không tìm thấy user liên kết với thông tin đăng nhập Google.");
+                    return ApiResult<string>.Failure("No user associated with the provided Google login.");
                 }
             }
 
-            // Sinh token JWT cho user
-            var tokenResult = await _tokenService.GenerateToken(user);
+            // Generate a JWT token for the user
+            var tokenResult = await _tokenService.GenerateToken(user).ConfigureAwait(false);
             return tokenResult;
         }
     }

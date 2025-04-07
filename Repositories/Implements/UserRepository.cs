@@ -13,41 +13,33 @@ namespace Repositories
         }
 
         /// <summary>
-        /// Lấy danh sách user kèm role dạng phân trang.
+        /// Retrieves a paginated list of users along with their assigned roles.
         /// </summary>
         public async Task<PagedList<UserDetailsDTO>> GetUserDetailsAsync(int pageNumber, int pageSize)
         {
-            // Sử dụng GroupJoin để lấy các role của từng user trong 1 truy vấn duy nhất
-            var groupedQuery = _context.Users
-                .GroupJoin(
-                    _context.Set<IdentityUserRole<Guid>>(),
-                    u => u.Id,
-                    ur => ur.UserId,
-                    (u, urGroup) => new { User = u, UserRoles = urGroup }
-                )
-                .Select(x => new
+            // Use AsNoTracking() to improve read performance by avoiding unnecessary change tracking
+            var query = _context.Users
+                .AsNoTracking()
+                .OrderByDescending(u => u.CreateAt)
+                .Select(u => new
                 {
-                    x.User,
-                    RoleNames = x.UserRoles
-                        .Join(
-                            _context.Roles,
-                            ur => ur.RoleId,
-                            r => r.Id,
-                            (ur, r) => r.Name
-                        ).ToList()
-                })
-                .OrderByDescending(x => x.User.CreateAt);
+                    User = u,
+                    RoleNames = (from ur in _context.Set<IdentityUserRole<Guid>>().AsNoTracking()
+                                 join r in _context.Roles.AsNoTracking() on ur.RoleId equals r.Id
+                                 where ur.UserId == u.Id
+                                 select r.Name).ToList()
+                });
 
-            // Lấy tổng số bản ghi
-            var count = await groupedQuery.CountAsync();
+            // Count the total number of users
+            var count = await query.CountAsync();
 
-            // Lấy dữ liệu theo phân trang
-            var data = await groupedQuery
+            // Paginate the data
+            var data = await query
                 .Skip((pageNumber - 1) * pageSize)
                 .Take(pageSize)
                 .ToListAsync();
 
-            // Ánh xạ dữ liệu sang UserDetailsDTO 
+            // Map the result to UserDetailsDTO
             var dtos = data.Select(x => new UserDetailsDTO
             {
                 Id = x.User.Id,

@@ -1,27 +1,43 @@
-﻿namespace Repositories.WorkSeeds.Implements
+﻿using System.Data;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
+
+namespace Repositories.WorkSeeds.Implements
 {
     public class UnitOfWork : IUnitOfWork
     {
         private readonly BaseIdentityDbContext _context;
-        private bool _disposed;
         private readonly IUserRepository _userRepository;
+        private bool _disposed;
 
         public UnitOfWork(BaseIdentityDbContext context, IUserRepository userRepository)
         {
-            _context = context;
-            _userRepository = userRepository;
-
+            _context = context ?? throw new ArgumentNullException(nameof(context));
+            _userRepository = userRepository ?? throw new ArgumentNullException(nameof(userRepository));
         }
-        /// <summary>
-        /// Commit các thay đổi trên toàn bộ context.
-        /// </summary>
+
+        public IUserRepository UserRepository => _userRepository;
+
         public async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
         {
             return await _context.SaveChangesAsync(cancellationToken);
         }
-        public IUserRepository userRepository => _userRepository;
 
-        #region Dispose Pattern
+        // Triển khai BeginTransactionAsync
+        public async Task<IDbContextTransaction> BeginTransactionAsync(
+            IsolationLevel isolationLevel = IsolationLevel.ReadCommitted,
+            CancellationToken cancellationToken = default)
+        {
+            // Gọi DatabaseFacade.BeginTransactionAsync với IsolationLevel
+            return await _context.Database.BeginTransactionAsync(isolationLevel, cancellationToken);
+        }
+
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
         protected virtual void Dispose(bool disposing)
         {
             if (!_disposed)
@@ -33,13 +49,5 @@
                 _disposed = true;
             }
         }
-
-        public void Dispose()
-        {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
-        #endregion
     }
-
 }
