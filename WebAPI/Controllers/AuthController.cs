@@ -1,7 +1,5 @@
 ﻿using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
-using Services.Interfaces;
 
 namespace WebAPI.Controllers
 {
@@ -9,13 +7,13 @@ namespace WebAPI.Controllers
     [ApiController]
     public class AuthController : ControllerBase
     {
-        private readonly IUserService _userServices;
+        private readonly IUserService _userService;
         private readonly SignInManager<User> _signInManager;
         private readonly IExternalAuthService _externalAuthService;
 
         public AuthController(IUserService userServices, SignInManager<User> signInManager,   IExternalAuthService externalAuthService)
         {
-            _userServices = userServices;
+            _userService = userServices;
             _signInManager = signInManager;
             _externalAuthService = externalAuthService;
         }
@@ -24,7 +22,7 @@ namespace WebAPI.Controllers
         public async Task<IActionResult> Register([FromBody] UserRegisterRequest request)
         {
             
-            var reponse = await _userServices.RegisterAsync(request);
+            var reponse = await _userService.RegisterAsync(request);
             return Ok(reponse);
         }
 
@@ -32,17 +30,19 @@ namespace WebAPI.Controllers
         [AllowAnonymous]
         public async Task<IActionResult> Login([FromBody] UserLoginRequest request)
            {
-            var reponse = await _userServices.LoginAsync(request);
+            var reponse = await _userService.LoginAsync(request);
             return Ok(reponse);
         }
 
-        //get user by id
-        [HttpGet("{id}")]
-        [Authorize(Roles = "USER,ADMIN")]
-        public async Task<IActionResult> GetById(Guid id)
+        [HttpPatch]
+        public async Task<IActionResult> UpdateUser([FromBody] UpdateUserRequest request)
         {
-            var reponse = await _userServices.GetByIdAsync(id);
-            return Ok(reponse);
+            var response = await _userService.UpdateCurrentUserAsync(request);
+            if (!response.IsSuccess)
+            {
+                return BadRequest(response);
+            }
+            return Ok(response);
         }
 
         //refresh token
@@ -50,7 +50,7 @@ namespace WebAPI.Controllers
         [Authorize]
         public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenRequest request)
         {
-            var reponse = await _userServices.RefreshTokenAsync(request);
+            var reponse = await _userService.RefreshTokenAsync(request);
             return Ok(reponse);
         }
 
@@ -59,7 +59,7 @@ namespace WebAPI.Controllers
         [Authorize]
         public async Task<IActionResult> RevokeRefreshToken([FromBody] RefreshTokenRequest request)
         {
-            var response = await _userServices.RevokeRefreshToken(request);
+            var response = await _userService.RevokeRefreshToken(request);
             if (response.IsSuccess)
             {
                 return Ok(response);
@@ -72,7 +72,7 @@ namespace WebAPI.Controllers
         [Authorize]
         public async Task<IActionResult> GetCurrentUser()
         {
-            var response = await _userServices.GetCurrentUserAsync();
+            var response = await _userService.GetCurrentUserAsync();
             return Ok(response);
         }
         // 1) API gọi để lấy link Google OAuth2

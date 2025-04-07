@@ -1,9 +1,12 @@
-﻿using System.Security.Cryptography;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Security.Cryptography;
 using System.Text;
 using System.Transactions;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.IdentityModel.Tokens;
+
 
 namespace BaseIdentity.Application.Services
 {
@@ -13,13 +16,15 @@ namespace BaseIdentity.Application.Services
         private readonly ICurrentUserService _currentUserService;
         private readonly UserManager<User> _userManager;
         private readonly ILogger<UserService> _logger;
+        private readonly IUnitOfWork _unitOfWork;
 
-        public UserService(ITokenService tokenServices, ICurrentUserService currentUserService, UserManager<User> userManager, ILogger<UserService> logger)
+        public UserService(ITokenService tokenServices, ICurrentUserService currentUserService, UserManager<User> userManager, ILogger<UserService> logger, IUnitOfWork unitOfWork)
         {
             _tokenServices = tokenServices;
             _currentUserService = currentUserService;
             _userManager = userManager;
             _logger = logger;
+            _unitOfWork = unitOfWork;
         }
 
         public async Task<ApiResult<UserResponse>> RegisterAsync(UserRegisterRequest request)
@@ -258,10 +263,36 @@ namespace BaseIdentity.Application.Services
                 return ApiResult<UserResponse>.Failure("User not found");
             }
 
-            user.FirstName = request.FirstName;
-            user.LastName = request.LastName;
-            user.Email = request.Email;
-            user.Gender = request.Gender;
+            // Cập nhật từng trường nếu request có giá trị (không null, không rỗng, và không là placeholder "string")
+            if (!string.IsNullOrEmpty(request.FirstName) && request.FirstName != "string")
+            {
+                user.FirstName = request.FirstName;
+            }
+            if (!string.IsNullOrEmpty(request.LastName) && request.LastName != "string")
+            {
+                user.LastName = request.LastName;
+            }
+            if (!string.IsNullOrEmpty(request.Email) && request.Email != "string")
+            {
+                // Kiểm tra định dạng email (có thể dùng EmailAddressAttribute hoặc Regex)
+                var emailValidator = new EmailAddressAttribute();
+                if (emailValidator.IsValid(request.Email))
+                {
+                    user.Email = request.Email;
+                }
+                else
+                {
+                    _logger.LogInformation("Email format is not valid");
+                    return ApiResult<UserResponse>.Failure("Email format is not valid");
+                }
+            }
+            if (!string.IsNullOrEmpty(request.Gender.ToString()) && request.Gender.ToString() != "string")
+            {
+                user.Gender = request.Gender.ToString();
+            }
+
+            // Cập nhật thời gian sửa
+            user.UpdateAt = DateTime.UtcNow;
 
             var updateResult = await _userManager.UpdateAsync(user);
             if (!updateResult.Succeeded)
@@ -274,6 +305,64 @@ namespace BaseIdentity.Application.Services
             var userResponse = MapUserToUserResponse(user);
             return ApiResult<UserResponse>.Success(userResponse);
         }
+
+        public async Task<ApiResult<UserResponse>> UpdateCurrentUserAsync(UpdateUserRequest request)
+        {
+            var currentUserId = _currentUserService.GetUserId();
+            if (string.IsNullOrEmpty(currentUserId))
+            {
+                _logger.LogInformation("Current user not found");
+                return ApiResult<UserResponse>.Failure("Current user not found");
+            }
+
+            var user = await _userManager.FindByIdAsync(currentUserId);
+            if (user == null)
+            {
+                _logger.LogInformation("User not found");
+                return ApiResult<UserResponse>.Failure("User not found");
+            }
+
+            // Cập nhật từng trường nếu có giá trị trong request (partial update)
+            if (!string.IsNullOrEmpty(request.FirstName) && request.FirstName != "string")
+            {
+                user.FirstName = request.FirstName;
+            }
+            if (!string.IsNullOrEmpty(request.LastName) && request.LastName != "string")
+            {
+                user.LastName = request.LastName;
+            }
+            if (!string.IsNullOrEmpty(request.Email) && request.Email != "string")
+            {
+                var emailValidator = new EmailAddressAttribute();
+                if (emailValidator.IsValid(request.Email))
+                {
+                    user.Email = request.Email;
+                }
+                else
+                {
+                    // Xử lý khi email không hợp lệ
+                    throw new ArgumentException("Email format is not valid.");
+                }
+            }
+            if (!string.IsNullOrEmpty(request.Gender.ToString()))
+            {
+                user.Gender = request.Gender.ToString();
+            }
+            // Có thể cập nhật thêm các trường khác tương tự
+
+            var updateResult = await _userManager.UpdateAsync(user);
+            if (!updateResult.Succeeded)
+            {
+                var errors = string.Join(", ", updateResult.Errors.Select(e => e.Description));
+                _logger.LogInformation("Update failed: " + errors);
+                return ApiResult<UserResponse>.Failure(errors);
+            }
+
+            var userResponse = MapUserToUserResponse(user);
+            return ApiResult<UserResponse>.Success(userResponse);
+        }
+
+
 
         public async Task<ApiResult<CurrentUserResponse>> RefreshTokenAsync(RefreshTokenRequest request)
         {
@@ -372,6 +461,12 @@ namespace BaseIdentity.Application.Services
 
             var userResponse = MapUserToUserResponse(user, accessToken, refreshToken);
             return userResponse;
+        }
+        public async Task<ApiResult<PagedList<UserDetailsDTO>>> GetUsersAsync(int pageNumber, int pageSize)
+        {
+            var pagedUserResponse = await _unitOfWork.userRepository.GetUserDetailsAsync(pageNumber, pageSize);
+            return ApiResult<PagedList<UserDetailsDTO>>.Success(pagedUserResponse);
+
         }
     }
 }

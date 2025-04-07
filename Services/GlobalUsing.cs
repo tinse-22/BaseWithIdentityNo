@@ -5,3 +5,5 @@ global using Services.Interfaces;
 global using DTOs.UserDTOs.Request;
 global using DTOs.UserDTOs.Response;
 global using UserDTOs.DTOs.Response;
+global using Repositories.Helpers;
+global using Repositories.WorkSeeds.Interfaces;

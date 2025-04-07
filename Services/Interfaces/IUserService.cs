@@ -1,4 +1,6 @@
-﻿namespace Services.Interfaces
+﻿using Repositories.Helpers;
+
+namespace Services.Interfaces
 {
     public interface IUserService
     {
@@ -12,6 +14,8 @@
 
         Task<ApiResult<UserResponse>> LoginAsync(UserLoginRequest request);
         Task<UserResponse> CreateOrUpdateGoogleUserAsync(GoogleUserInfo googleUserInfo);
+        Task<ApiResult<PagedList<UserDetailsDTO>>> GetUsersAsync(int pageNumber, int pageSize);
+        Task<ApiResult<UserResponse>> UpdateCurrentUserAsync(UpdateUserRequest request);
 
     }
 }

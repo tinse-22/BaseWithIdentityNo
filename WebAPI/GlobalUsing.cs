@@ -7,3 +7,7 @@ global using BusinessObjects;
 global using DTOs.UserDTOs.Identities;
 global using DTOs.UserDTOs.Request;
 global using Microsoft.AspNetCore.Identity;
+global using BaseIdentity.Application.Services;
+global using Repositories.Interfaces;
+global using Services.Implements;
+global using Services.Interfaces;

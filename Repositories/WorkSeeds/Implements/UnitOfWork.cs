@@ -1,15 +1,15 @@
-﻿using Repositories.WorkSeeds.Interfaces;
-
-namespace Repositories.WorkSeeds.Implements
+﻿namespace Repositories.WorkSeeds.Implements
 {
     public class UnitOfWork : IUnitOfWork
     {
         private readonly BaseIdentityDbContext _context;
         private bool _disposed;
+        private readonly IUserRepository _userRepository;
 
-        public UnitOfWork(BaseIdentityDbContext context)
+        public UnitOfWork(BaseIdentityDbContext context, IUserRepository userRepository)
         {
-            _context = context ?? throw new ArgumentNullException(nameof(context));
+            _context = context;
+            _userRepository = userRepository;
 
         }
         /// <summary>
@@ -19,6 +19,7 @@ namespace Repositories.WorkSeeds.Implements
         {
             return await _context.SaveChangesAsync(cancellationToken);
         }
+        public IUserRepository userRepository => _userRepository;
 
         #region Dispose Pattern
         protected virtual void Dispose(bool disposing)
