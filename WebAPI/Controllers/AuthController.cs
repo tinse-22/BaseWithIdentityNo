@@ -70,7 +70,7 @@ namespace WebAPI.Controllers
         [Authorize]
         public async Task<IActionResult> RevokeRefreshToken([FromBody] RefreshTokenRequest request)
         {
-            var response = await _userService.RevokeRefreshToken(request);
+            var response = await _userService.RevokeRefreshTokenAsync(request);
             if (response.IsSuccess)
             {
                 return Ok(response);
