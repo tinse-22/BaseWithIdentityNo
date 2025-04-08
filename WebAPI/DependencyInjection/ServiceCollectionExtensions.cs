@@ -8,7 +8,7 @@ namespace WebAPI.DependencyInjection
             services.AddDbContext<BaseIdentityDbContext>(options =>
                 options.UseSqlServer(
                     configuration.GetConnectionString("IdentityAuthentication"),
-                    sqlOptions => sqlOptions.MigrationsAssembly(typeof(InfrastructureServiceCollectionExtensions).Assembly.FullName)
+                    sqlOptions => sqlOptions.MigrationsAssembly("Repositories") // Chỉ rõ tên assembly của tầng Repositories
                 ));
 
             services.AddCors(options =>

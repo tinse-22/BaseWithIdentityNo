@@ -1,12 +1,18 @@
-﻿namespace Repositories.WorkSeeds.Interfaces
-{
-    public interface IUnitOfWork
-    {
-        // Thêm các repository khác nếu cần
+﻿using System.Data;
+using Microsoft.EntityFrameworkCore.Storage;
 
-        /// <summary>
-        /// Commit các thay đổi trên toàn bộ các repository.
-        /// </summary>
+namespace Repositories.WorkSeeds.Interfaces
+{
+    public interface IUnitOfWork : IDisposable
+    {
         Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
+
+        // Repository cho người dùng
+        IUserRepository UserRepository { get; }
+
+        // Thêm phương thức BeginTransactionAsync
+        Task<IDbContextTransaction> BeginTransactionAsync(
+            IsolationLevel isolationLevel = IsolationLevel.ReadCommitted,
+            CancellationToken cancellationToken = default);
     }
 }

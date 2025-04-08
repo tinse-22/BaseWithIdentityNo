@@ -1,5 +1,4 @@
 ﻿using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 namespace WebAPI.DependencyInjection
@@ -8,7 +7,7 @@ namespace WebAPI.DependencyInjection
     {
         public static IServiceCollection AddIdentityServices(this IServiceCollection services, IConfiguration configuration)
         {
-            services.AddIdentity<User, IdentityRole<Guid>>(options =>
+            services.AddIdentity<User, Role>(options =>
             {
                 // Cấu hình Identity
                 options.Lockout.MaxFailedAccessAttempts = 5;
@@ -22,6 +21,7 @@ namespace WebAPI.DependencyInjection
             })
             .AddEntityFrameworkStores<BaseIdentityDbContext>()
             .AddDefaultTokenProviders();
+
 
             // Cấu hình JWT Authentication
             var jwtSettings = configuration.GetSection("JwtSettings").Get<JwtSettings>();
@@ -62,8 +62,14 @@ namespace WebAPI.DependencyInjection
                         return context.Response.WriteAsync(result);
                     }
                 };
-            });
-
+            })
+            // Cấu hình Google OAuth (cho phép đăng nhập bằng Google)
+             .AddGoogle(options =>
+              {
+                  options.ClientId = configuration["Authentication:Google:ClientId"];
+                  options.ClientSecret = configuration["Authentication:Google:ClientSecret"];
+                  // options.CallbackPath = "/signin-google"; // Nếu muốn tùy chỉnh callback path
+              });
             return services;
         }
     }

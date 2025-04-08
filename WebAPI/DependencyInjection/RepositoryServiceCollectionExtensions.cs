@@ -7,6 +7,16 @@ namespace WebAPI.DependencyInjection
         {
             services.AddScoped<IUnitOfWork, UnitOfWork>();
             services.AddScoped(typeof(IGenericRepository<,>), typeof(GenericRepository<,>));
+
+            //DI Repositories
+
+            services.AddScoped<IUserRepository, UserRepository>();
+
+            //DI Services
+            services.AddScoped<ICurrentUserService, CurrentUserService>();
+            services.AddScoped<IExternalAuthService, ExternalAuthService>();
+            services.AddScoped<ITokenService, TokenService>();
+            services.AddScoped<IUserService, UserService>();
             return services;
         }
     }

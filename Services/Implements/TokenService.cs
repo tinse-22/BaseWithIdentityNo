@@ -6,15 +6,15 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 
-
 namespace Services.Implements
 {
     public class TokenService : ITokenService
     {
+        private static readonly JwtSecurityTokenHandler _tokenHandler = new();
         private readonly SymmetricSecurityKey _secretKey;
         private readonly string? _validIssuer;
         private readonly string? _validAudience;
-        private readonly double _expires;
+        readonly double _expires;
         private readonly UserManager<User> _userManager;
 
         public TokenService(IConfiguration configuration, UserManager<User> userManager)
@@ -37,16 +37,12 @@ namespace Services.Implements
             var randomNumber = new byte[64];
             using var rng = RandomNumberGenerator.Create();
             rng.GetBytes(randomNumber);
-
             return Convert.ToBase64String(randomNumber);
         }
 
         private async Task<List<Claim>> GetClaimsAsync(User user)
         {
-            // Validate user object
-            if (user == null)
-                return new List<Claim>();
-
+            // Assuming the user is not null as it's been checked before calling this method.
             var claims = new List<Claim>
                 {
                     new Claim(ClaimTypes.Name, user.UserName ?? string.Empty),
@@ -57,7 +53,7 @@ namespace Services.Implements
                     new Claim("Gender", user.Gender ?? string.Empty)
                 };
 
-            var roles = await _userManager.GetRolesAsync(user);
+            var roles = await _userManager.GetRolesAsync(user).ConfigureAwait(false);
             claims.AddRange(roles.Select(role => new Claim(ClaimTypes.Role, role)));
 
             return claims;
@@ -65,12 +61,11 @@ namespace Services.Implements
 
         private JwtSecurityToken GenerateTokenOptions(SigningCredentials signingCredentials, List<Claim> claims)
         {
-            // Additional checks or logging can go here if desired
             return new JwtSecurityToken(
                 issuer: _validIssuer,
                 audience: _validAudience,
                 claims: claims,
-                expires: DateTime.Now.AddMinutes(_expires),
+                expires: DateTime.UtcNow.AddMinutes(_expires),
                 signingCredentials: signingCredentials
             );
         }
@@ -81,9 +76,9 @@ namespace Services.Implements
                 return ApiResult<string>.Failure("User is null.");
 
             var signingCredentials = new SigningCredentials(_secretKey, SecurityAlgorithms.HmacSha256);
-            var claims = await GetClaimsAsync(user);
+            var claims = await GetClaimsAsync(user).ConfigureAwait(false);
             var tokenOptions = GenerateTokenOptions(signingCredentials, claims);
-            var token = new JwtSecurityTokenHandler().WriteToken(tokenOptions);
+            var token = _tokenHandler.WriteToken(tokenOptions);
 
             return ApiResult<string>.Success(token);
         }
