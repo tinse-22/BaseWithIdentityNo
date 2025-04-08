@@ -15,5 +15,10 @@ namespace Services.Implements
             var userId = _httpContextAccessor.HttpContext?.User?.FindFirstValue(ClaimTypes.NameIdentifier);
             return userId;
         }
+        public bool IsAdmin()
+        {
+            // Giả sử role admin có tên "ADMIN"
+            return _httpContextAccessor.HttpContext?.User?.IsInRole("ADMIN") ?? false;
+        }
     }
 }

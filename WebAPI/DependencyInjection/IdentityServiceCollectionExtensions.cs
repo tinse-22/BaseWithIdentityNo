@@ -62,8 +62,14 @@ namespace WebAPI.DependencyInjection
                         return context.Response.WriteAsync(result);
                     }
                 };
-            });
-
+            })
+            // Cấu hình Google OAuth (cho phép đăng nhập bằng Google)
+             .AddGoogle(options =>
+              {
+                  options.ClientId = configuration["Authentication:Google:ClientId"];
+                  options.ClientSecret = configuration["Authentication:Google:ClientSecret"];
+                  // options.CallbackPath = "/signin-google"; // Nếu muốn tùy chỉnh callback path
+              });
             return services;
         }
     }

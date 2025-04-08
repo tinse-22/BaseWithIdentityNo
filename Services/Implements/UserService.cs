@@ -1,6 +1,4 @@
 ﻿using System.ComponentModel.DataAnnotations;
-using System.Security.Cryptography;
-using System.Text;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -81,7 +79,7 @@ namespace BaseIdentity.Application.Services
 
             _logger.LogInformation("User created successfully: {Email}", newUser.Email);
             var tokenResult = await _tokenServices.GenerateToken(newUser);
-            var userResponse = MapUserToUserResponse(newUser, tokenResult.IsSuccess ? tokenResult.Data : null);
+            var userResponse = await MapUserToUserResponseAsync(newUser, tokenResult.IsSuccess ? tokenResult.Data : null);
             return ApiResult<UserResponse>.Success(userResponse);
         }
 
@@ -116,23 +114,26 @@ namespace BaseIdentity.Application.Services
 
             await _userManager.ResetAccessFailedCountAsync(user);
             var accessTokenResult = await _tokenServices.GenerateToken(user);
+
+            // Tạo refresh token (plain text)
             var refreshToken = _tokenServices.GenerateRefreshToken();
 
-            using (var sha256 = SHA256.Create())
-            {
-                var hashedRefreshToken = sha256.ComputeHash(Encoding.UTF8.GetBytes(refreshToken));
-                user.RefreshToken = Convert.ToBase64String(hashedRefreshToken);
-            }
-            user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
+            // Lưu refresh token vào bảng UserTokens thông qua Identity API
+            var setTokenResult = await _userManager.SetAuthenticationTokenAsync(
+                user,
+                "MyApp",          // LoginProvider tùy chỉnh
+                "RefreshToken",   // Tên token
+                refreshToken      // Giá trị token plain text
+            );
 
-            var updateResult = await _userManager.UpdateAsync(user);
-            if (!updateResult.Succeeded)
+            if (!setTokenResult.Succeeded)
             {
-                _logger.LogWarning("Failed to update user with refresh token: {Errors}", string.Join(", ", updateResult.Errors.Select(e => e.Description)));
-                return ApiResult<UserResponse>.Failure(string.Join(", ", updateResult.Errors.Select(e => e.Description)));
+                _logger.LogWarning("Failed to set refresh token: {Errors}",
+                    string.Join(", ", setTokenResult.Errors.Select(e => e.Description)));
+                return ApiResult<UserResponse>.Failure(string.Join(", ", setTokenResult.Errors.Select(e => e.Description)));
             }
 
-            var userResponse = MapUserToUserResponse(user, accessTokenResult.Data, refreshToken);
+            var userResponse =await MapUserToUserResponseAsync(user, accessTokenResult.Data, refreshToken);
             return ApiResult<UserResponse>.Success(userResponse);
         }
 
@@ -146,7 +147,7 @@ namespace BaseIdentity.Application.Services
                 return ApiResult<UserResponse>.Failure("User not found");
             }
 
-            var userResponse = MapUserToUserResponse(user);
+            var userResponse = await MapUserToUserResponseAsync(user);
             return ApiResult<UserResponse>.Success(userResponse);
         }
 
@@ -167,27 +168,42 @@ namespace BaseIdentity.Application.Services
 
         public async Task<ApiResult<RevokeRefreshTokenResponse>> RevokeRefreshTokenAsync(RefreshTokenRequest request)
         {
-            var hashedRefreshToken = ComputeSha256Hash(request.RefreshToken);
-            var user = await _userManager.Users.FirstOrDefaultAsync(u => u.RefreshToken == hashedRefreshToken);
-            if (user == null)
+            // Lấy user hiện tại từ current user service
+            var userId = _currentUserService.GetUserId();
+            if (string.IsNullOrEmpty(userId))
             {
-                _logger.LogInformation("User not found for refresh token");
+                _logger.LogError("Current user ID not found for revoking refresh token");
                 return ApiResult<RevokeRefreshTokenResponse>.Failure("User not found");
             }
 
-            if (user.RefreshTokenExpiryTime < DateTime.UtcNow)
+            var user = await _userManager.FindByIdAsync(userId);
+            if (user == null)
             {
-                _logger.LogInformation("Refresh token expired for user: {Email}", user.Email);
-                return ApiResult<RevokeRefreshTokenResponse>.Failure("Refresh token expired");
+                _logger.LogInformation("User not found for revoking refresh token");
+                return ApiResult<RevokeRefreshTokenResponse>.Failure("User not found");
             }
 
-            user.RefreshToken = null;
-            user.RefreshTokenExpiryTime = null;
-            var result = await _userManager.UpdateAsync(user);
-            if (!result.Succeeded)
+            // Lấy refresh token đã lưu (plain text)
+            var storedRefreshToken = await _userManager.GetAuthenticationTokenAsync(user, "MyApp", "RefreshToken");
+            if (string.IsNullOrEmpty(storedRefreshToken))
             {
-                _logger.LogError("Failed to revoke refresh token: {Errors}", string.Join(", ", result.Errors.Select(e => e.Description)));
-                return ApiResult<RevokeRefreshTokenResponse>.Failure(string.Join(", ", result.Errors.Select(e => e.Description)));
+                _logger.LogInformation("No refresh token found for user: {Email}", user.Email);
+                return ApiResult<RevokeRefreshTokenResponse>.Failure("Refresh token not found");
+            }
+
+            if (storedRefreshToken != request.RefreshToken)
+            {
+                _logger.LogInformation("Refresh token does not match for user: {Email}", user.Email);
+                return ApiResult<RevokeRefreshTokenResponse>.Failure("Invalid refresh token");
+            }
+
+            // Gọi RemoveAuthenticationTokenAsync để revoke token
+            var removeResult = await _userManager.RemoveAuthenticationTokenAsync(user, "MyApp", "RefreshToken");
+            if (!removeResult.Succeeded)
+            {
+                _logger.LogError("Failed to revoke refresh token: {Errors}",
+                    string.Join(", ", removeResult.Errors.Select(e => e.Description)));
+                return ApiResult<RevokeRefreshTokenResponse>.Failure(string.Join(", ", removeResult.Errors.Select(e => e.Description)));
             }
 
             _logger.LogInformation("Refresh token revoked successfully for user: {Email}", user.Email);
@@ -203,19 +219,53 @@ namespace BaseIdentity.Application.Services
                 return ApiResult<UserResponse>.Failure("User not found");
             }
 
+            // Cập nhật các trường thông tin khác
             UpdateUserFields(user, request);
             user.UpdateAt = DateTime.UtcNow;
+
+            // Nếu request có chứa thông tin Role và người gọi là Admin, cập nhật role
+            if (request.Roles != null && request.Roles.Any())
+            {
+                if (_currentUserService.IsAdmin())
+                {
+                    var currentRoles = await _userManager.GetRolesAsync(user);
+                    if (currentRoles.Any())
+                    {
+                        var removeResult = await _userManager.RemoveFromRolesAsync(user, currentRoles);
+                        if (!removeResult.Succeeded)
+                        {
+                            _logger.LogWarning("Failed to remove existing roles for user {Id}: {Errors}",
+                                id, string.Join(", ", removeResult.Errors.Select(e => e.Description)));
+                            return ApiResult<UserResponse>.Failure(string.Join(", ", removeResult.Errors.Select(e => e.Description)));
+                        }
+                    }
+
+                    var addResult = await _userManager.AddToRolesAsync(user, request.Roles);
+                    if (!addResult.Succeeded)
+                    {
+                        _logger.LogWarning("Failed to add roles for user {Id}: {Errors}",
+                            id, string.Join(", ", addResult.Errors.Select(e => e.Description)));
+                        return ApiResult<UserResponse>.Failure(string.Join(", ", addResult.Errors.Select(e => e.Description)));
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation("User update skipped role modification because caller is not admin");
+                }
+            }
 
             var updateResult = await _userManager.UpdateAsync(user);
             if (!updateResult.Succeeded)
             {
-                _logger.LogWarning("Update failed for user {Id}: {Errors}", id, string.Join(", ", updateResult.Errors.Select(e => e.Description)));
+                _logger.LogWarning("Update failed for user {Id}: {Errors}", id,
+                    string.Join(", ", updateResult.Errors.Select(e => e.Description)));
                 return ApiResult<UserResponse>.Failure(string.Join(", ", updateResult.Errors.Select(e => e.Description)));
             }
 
-            var userResponse = MapUserToUserResponse(user);
+            var userResponse = await MapUserToUserResponseAsync(user);
             return ApiResult<UserResponse>.Success(userResponse);
         }
+
 
         public async Task<ApiResult<UserResponse>> UpdateCurrentUserAsync(UpdateUserRequest request)
         {
@@ -239,29 +289,44 @@ namespace BaseIdentity.Application.Services
             var updateResult = await _userManager.UpdateAsync(user);
             if (!updateResult.Succeeded)
             {
-                _logger.LogWarning("Update failed for current user {Id}: {Errors}", userId, string.Join(", ", updateResult.Errors.Select(e => e.Description)));
+                _logger.LogWarning("Update failed for current user {Id}: {Errors}", userId,
+                    string.Join(", ", updateResult.Errors.Select(e => e.Description)));
                 return ApiResult<UserResponse>.Failure(string.Join(", ", updateResult.Errors.Select(e => e.Description)));
             }
 
-            var userResponse = MapUserToUserResponse(user);
+            var userResponse = await MapUserToUserResponseAsync(user);
             return ApiResult<UserResponse>.Success(userResponse);
         }
 
         public async Task<ApiResult<CurrentUserResponse>> RefreshTokenAsync(RefreshTokenRequest request)
         {
             _logger.LogInformation("Refreshing token");
-            var hashedRefreshToken = ComputeSha256Hash(request.RefreshToken);
-            var user = await _userManager.Users.FirstOrDefaultAsync(u => u.RefreshToken == hashedRefreshToken);
-            if (user == null)
+
+            var userId = _currentUserService.GetUserId();
+            if (string.IsNullOrEmpty(userId))
             {
-                _logger.LogError("Invalid refresh token");
+                _logger.LogError("Current user ID not found");
                 return ApiResult<CurrentUserResponse>.Failure("Invalid refresh token");
             }
 
-            if (user.RefreshTokenExpiryTime < DateTime.UtcNow)
+            var user = await _userManager.FindByIdAsync(userId);
+            if (user == null)
             {
-                _logger.LogWarning("Refresh token expired for user: {Email}", user.Email);
-                return ApiResult<CurrentUserResponse>.Failure("Refresh token expired");
+                _logger.LogError("User not found for refresh token");
+                return ApiResult<CurrentUserResponse>.Failure("Invalid refresh token");
+            }
+
+            var storedRefreshToken = await _userManager.GetAuthenticationTokenAsync(user, "MyApp", "RefreshToken");
+            if (string.IsNullOrEmpty(storedRefreshToken))
+            {
+                _logger.LogError("No refresh token stored for user: {Email}", user.Email);
+                return ApiResult<CurrentUserResponse>.Failure("Invalid refresh token");
+            }
+
+            if (storedRefreshToken != request.RefreshToken)
+            {
+                _logger.LogError("Refresh token does not match for user: {Email}", user.Email);
+                return ApiResult<CurrentUserResponse>.Failure("Invalid refresh token");
             }
 
             var newAccessToken = await _tokenServices.GenerateToken(user);
@@ -317,8 +382,16 @@ namespace BaseIdentity.Application.Services
             else
             {
                 bool hasChange = false;
-                if (user.FirstName != googleUserInfo.FirstName) { user.FirstName = googleUserInfo.FirstName; hasChange = true; }
-                if (user.LastName != googleUserInfo.LastName) { user.LastName = googleUserInfo.LastName; hasChange = true; }
+                if (user.FirstName != googleUserInfo.FirstName)
+                {
+                    user.FirstName = googleUserInfo.FirstName;
+                    hasChange = true;
+                }
+                if (user.LastName != googleUserInfo.LastName)
+                {
+                    user.LastName = googleUserInfo.LastName;
+                    hasChange = true;
+                }
 
                 if (hasChange)
                 {
@@ -344,12 +417,25 @@ namespace BaseIdentity.Application.Services
 
             var tokenResult = await _tokenServices.GenerateToken(user);
             var refreshToken = _tokenServices.GenerateRefreshToken();
-            return MapUserToUserResponse(user, tokenResult.IsSuccess ? tokenResult.Data : null, refreshToken);
+            // Lưu refresh token vào Identity API (không thêm expiry) – dùng plain text
+            var setTokenResult = await _userManager.SetAuthenticationTokenAsync(
+                user,
+                "MyApp",
+                "RefreshToken",
+                refreshToken
+            );
+            if (!setTokenResult.Succeeded)
+            {
+                _logger.LogWarning("Failed to set refresh token for Google user: {Errors}", string.Join(", ", setTokenResult.Errors.Select(e => e.Description)));
+                throw new Exception("Setting refresh token failed");
+            }
+
+            return await MapUserToUserResponseAsync(user, tokenResult.IsSuccess ? tokenResult.Data : null, refreshToken).ConfigureAwait(false);
         }
 
         public async Task<ApiResult<PagedList<UserDetailsDTO>>> GetUsersAsync(int pageNumber, int pageSize)
         {
-            var pagedUsers = await _unitOfWork.userRepository.GetUserDetailsAsync(pageNumber, pageSize);
+            var pagedUsers = await _unitOfWork.UserRepository.GetUserDetailsAsync(pageNumber, pageSize);
             return ApiResult<PagedList<UserDetailsDTO>>.Success(pagedUsers);
         }
 
@@ -400,8 +486,10 @@ namespace BaseIdentity.Application.Services
             return userName;
         }
 
-        private UserResponse MapUserToUserResponse(User user, string? accessToken = null, string? refreshToken = null)
+        private async Task<UserResponse> MapUserToUserResponseAsync(User user, string? accessToken = null, string? refreshToken = null)
         {
+            // Lấy danh sách role của user từ UserManager
+            var roles = await _userManager.GetRolesAsync(user);
             return new UserResponse
             {
                 Id = user.Id,
@@ -409,12 +497,15 @@ namespace BaseIdentity.Application.Services
                 LastName = user.LastName ?? string.Empty,
                 Email = user.Email ?? string.Empty,
                 Gender = user.Gender ?? string.Empty,
+                PhoneNumbers = user.PhoneNumber ?? string.Empty,
                 CreateAt = user.CreateAt,
                 UpdateAt = user.UpdateAt,
                 AccessToken = accessToken,
-                RefreshToken = refreshToken
+                RefreshToken = refreshToken,
+                Roles = roles.ToList()
             };
         }
+
 
         private CurrentUserResponse MapUserToCurrentUserResponse(User user, string? accessToken = null)
         {
@@ -424,17 +515,11 @@ namespace BaseIdentity.Application.Services
                 LastName = user.LastName ?? string.Empty,
                 Email = user.Email ?? string.Empty,
                 Gender = user.Gender ?? string.Empty,
+                PhoneNumbers = user.PhoneNumber ?? string.Empty,
                 CreateAt = user.CreateAt,
                 UpdateAt = user.UpdateAt,
                 AccessToken = accessToken
             };
-        }
-
-        private static string ComputeSha256Hash(string token)
-        {
-            using var sha256 = SHA256.Create();
-            var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(token));
-            return Convert.ToBase64String(hashBytes);
         }
 
         private void UpdateUserFields(User user, UpdateUserRequest request)
@@ -449,6 +534,8 @@ namespace BaseIdentity.Application.Services
                     throw new ArgumentException("Email format is not valid.");
             }
             if (!string.IsNullOrEmpty(request.Gender.ToString())) user.Gender = request.Gender.ToString();
+            if (!string.IsNullOrEmpty(request.PhoneNumbers)) user.PhoneNumber = request.PhoneNumbers;
+
         }
     }
 }
