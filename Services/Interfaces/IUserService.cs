@@ -1,6 +1,4 @@
-﻿using Repositories.Helpers;
-
-namespace Services.Interfaces
+﻿namespace Services.Interfaces
 {
     public interface IUserService
     {
