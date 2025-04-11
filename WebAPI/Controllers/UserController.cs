@@ -15,9 +15,6 @@ namespace WebAPI.Controllers
             _userService = userService;
         }
 
-        /// <summary>
-        /// Lấy thông tin chi tiết của một user theo ID.
-        /// </summary>
         [HttpGet("{id}")]
         public async Task<IActionResult> GetUserById(Guid id)
         {
@@ -29,9 +26,6 @@ namespace WebAPI.Controllers
             return Ok(response);
         }
 
-        /// <summary>
-        /// Lấy danh sách user với phân trang.
-        /// </summary>
         [HttpGet]
         public async Task<IActionResult> GetAllUsers([FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 10)
         {
@@ -40,9 +34,6 @@ namespace WebAPI.Controllers
             return Ok(response);
         }
 
-        /// <summary>
-        /// Cập nhật thông tin của một user.
-        /// </summary>
         [HttpPatch("{id}")]
         public async Task<IActionResult> UpdateUser(Guid id, [FromBody] UpdateUserRequest request)
         {
@@ -54,13 +45,10 @@ namespace WebAPI.Controllers
             return Ok(response);
         }
 
-        /// <summary>
-        /// Xóa một user theo ID.
-        /// </summary>
-        [HttpDelete("{id}")]
-        public async Task<IActionResult> DeleteUser(Guid id)
+        [HttpDelete("bulk")]
+        public async Task<IActionResult> DeleteUser([FromQuery] List<Guid> ids)
         {
-            await _userService.DeleteAsync(id);
+            await _userService.DeleteUsersAsync(ids);
             return NoContent();
         }
     }

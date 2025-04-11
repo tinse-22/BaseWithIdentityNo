@@ -31,23 +31,14 @@ namespace Repositories.WorkSeeds.Implements
             // Gọi DatabaseFacade.BeginTransactionAsync với IsolationLevel
             return await _context.Database.BeginTransactionAsync(isolationLevel, cancellationToken);
         }
-
-        public void Dispose()
-        {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
-
-        protected virtual void Dispose(bool disposing)
+        public async ValueTask DisposeAsync()
         {
             if (!_disposed)
             {
-                if (disposing)
-                {
-                    _context.Dispose();
-                }
+                await _context.DisposeAsync();
                 _disposed = true;
             }
+            GC.SuppressFinalize(this);
         }
     }
 }

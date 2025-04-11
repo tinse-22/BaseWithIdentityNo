@@ -46,7 +46,12 @@ namespace BaseIdentity.Application.Services
                 Gender = request.Gender.ToString(),
                 CreateAt = DateTime.UtcNow,
                 UpdateAt = DateTime.UtcNow,
-                UserName = await GenerateUserNameAsync(request.FirstName ?? string.Empty, request.LastName ?? string.Empty)
+                // Fix for the CS1061 error: The method `GenerateUserName` is defined as returning a `string`,
+                // but it is being awaited as if it were an asynchronous method. To fix this, remove the `await` keyword
+                // and call the method directly.
+
+                UserName = GenerateUserName(request.FirstName ?? string.Empty, request.LastName ?? string.Empty)
+
             };
 
             using (var transaction = await _unitOfWork.BeginTransactionAsync())
@@ -82,7 +87,6 @@ namespace BaseIdentity.Application.Services
             var userResponse = await MapUserToUserResponseAsync(newUser, tokenResult.IsSuccess ? tokenResult.Data : null);
             return ApiResult<UserResponse>.Success(userResponse);
         }
-
         public async Task<ApiResult<UserResponse>> LoginAsync(UserLoginRequest request)
         {
             if (request == null)
@@ -154,7 +158,7 @@ namespace BaseIdentity.Application.Services
         public async Task<ApiResult<CurrentUserResponse>> GetCurrentUserAsync()
         {
             var userId = _currentUserService.GetUserId();
-            var user = await _userManager.FindByIdAsync(userId ?? string.Empty);
+            var user = await _userManager.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id.ToString() == userId);
             if (user == null)
             {
                 _logger.LogInformation("Current user not found for ID: {Id}", userId);
@@ -347,6 +351,47 @@ namespace BaseIdentity.Application.Services
             await _userManager.DeleteAsync(user);
             _logger.LogInformation("User deleted: {Id}", id);
         }
+        //Delete multiple users
+        public async Task DeleteUsersAsync(List<Guid> ids)
+        {
+            _logger.LogInformation("Starting bulk deletion for users: {Ids}", string.Join(", ", ids));
+
+            using (var transaction = await _unitOfWork.BeginTransactionAsync())
+            {
+                try
+                {
+                    foreach (var id in ids)
+                    {
+                        var user = await _userManager.FindByIdAsync(id.ToString());
+                        if (user == null)
+                        {
+                            _logger.LogWarning("User not found for deletion: {Id}", id);
+                            // Nếu một user không tồn tại thì ném exception để rollback toàn bộ transaction
+                            throw new Exception($"User not found: {id}");
+                        }
+
+                        var result = await _userManager.DeleteAsync(user);
+                        if (!result.Succeeded)
+                        {
+                            var errors = string.Join(", ", result.Errors.Select(e => e.Description));
+                            _logger.LogWarning("Failed to delete user {Id}: {Errors}", id, errors);
+                            throw new Exception($"Deletion failed for user: {id} - Errors: {errors}");
+                        }
+
+                        _logger.LogInformation("User deleted successfully: {Id}", id);
+                    }
+                    await transaction.CommitAsync();
+                    _logger.LogInformation("Bulk deletion committed successfully for users: {Ids}", string.Join(", ", ids));
+                }
+                catch (Exception ex)
+                {
+                    await transaction.RollbackAsync();
+                    _logger.LogError(ex, "Bulk deletion failed for users: {Ids}", string.Join(", ", ids));
+                    throw; // ném lại exception để caller có thể biết có lỗi xảy ra
+                }
+            }
+        }
+
 
         public async Task<UserResponse> CreateOrUpdateGoogleUserAsync(GoogleUserInfo googleUserInfo)
         {
@@ -474,16 +519,10 @@ namespace BaseIdentity.Application.Services
         }
 
         // Helpers
-        private async Task<string> GenerateUserNameAsync(string firstName, string lastName)
+        private string GenerateUserName(string firstName, string lastName)
         {
             var baseUsername = $"{firstName.Replace(" ", "")}{lastName.Replace(" ", "")}".ToLower();
-            var userName = baseUsername;
-            var count = 1;
-            while (await _userManager.Users.AnyAsync(u => u.UserName == userName))
-            {
-                userName = $"{baseUsername}{count++}";
-            }
-            return userName;
+            return $"{baseUsername}{Guid.NewGuid().ToString("N").Substring(0, 8)}"; // Đảm bảo duy nhất
         }
 
         private async Task<UserResponse> MapUserToUserResponseAsync(User user, string? accessToken = null, string? refreshToken = null)
