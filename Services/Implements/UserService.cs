@@ -576,5 +576,60 @@ namespace BaseIdentity.Application.Services
             if (!string.IsNullOrEmpty(request.PhoneNumbers)) user.PhoneNumber = request.PhoneNumbers;
 
         }
+
+        public async Task<ApiResult<UserResponse>> LockUserAsync(Guid id)
+        {
+            var user = await _userManager.FindByIdAsync(id.ToString());
+            if (user == null)
+            {
+                _logger.LogInformation("User not found for locking: {Id}", id);
+                return ApiResult<UserResponse>.Failure("User not found");
+            }
+
+            // Kích hoạt tính năng lockout cho user nếu chưa được bật
+            if (!await _userManager.GetLockoutEnabledAsync(user))
+            {
+                await _userManager.SetLockoutEnabledAsync(user, true);
+            }
+
+            // Đặt LockoutEnd time đến thời điểm tối đa (nghĩa là khóa vĩnh viễn)
+            var result = await _userManager.SetLockoutEndDateAsync(user, DateTimeOffset.MaxValue);
+            if (!result.Succeeded)
+            {
+                _logger.LogWarning("Failed to lock user {Id}: {Errors}",
+                    id, string.Join(", ", result.Errors.Select(e => e.Description)));
+                return ApiResult<UserResponse>.Failure("Failed to lock user");
+            }
+
+            await _userManager.UpdateAsync(user);
+            _logger.LogInformation("User locked indefinitely: {Id}", id);
+            var userResponse = await MapUserToUserResponseAsync(user);
+            return ApiResult<UserResponse>.Success(userResponse);
+        }
+
+        public async Task<ApiResult<UserResponse>> UnlockUserAsync(Guid id)
+        {
+            var user = await _userManager.FindByIdAsync(id.ToString());
+            if (user == null)
+            {
+                _logger.LogInformation("User not found for unlocking: {Id}", id);
+                return ApiResult<UserResponse>.Failure("User not found");
+            }
+
+            // Đặt LockoutEnd về thời điểm hiện tại (hoặc null) để mở khóa
+            var result = await _userManager.SetLockoutEndDateAsync(user, DateTimeOffset.UtcNow);
+            if (!result.Succeeded)
+            {
+                _logger.LogWarning("Failed to unlock user {Id}: {Errors}",
+                    id, string.Join(", ", result.Errors.Select(e => e.Description)));
+                return ApiResult<UserResponse>.Failure("Failed to unlock user");
+            }
+
+            await _userManager.UpdateAsync(user);
+            _logger.LogInformation("User unlocked: {Id}", id);
+            var userResponse = await MapUserToUserResponseAsync(user);
+            return ApiResult<UserResponse>.Success(userResponse);
+        }
+
     }
 }

@@ -15,5 +15,7 @@
         Task<ApiResult<PagedList<UserDetailsDTO>>> GetUsersAsync(int pageNumber, int pageSize);
         Task<ApiResult<UserResponse>> UpdateCurrentUserAsync(UpdateUserRequest request);
         Task<ApiResult<string>> ChangePasswordAsync(ChangePasswordRequest request);
+        Task<ApiResult<UserResponse>> UnlockUserAsync(Guid id);
+        Task<ApiResult<UserResponse>> LockUserAsync(Guid id);
     }
 }
