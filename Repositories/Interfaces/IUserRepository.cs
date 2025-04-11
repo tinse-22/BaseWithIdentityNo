@@ -1,7 +1,4 @@
-﻿using DTOs.UserDTOs.Response;
-using Repositories.Helpers;
-
-namespace Repositories.Interfaces
+﻿namespace Repositories.Interfaces
 {
     public interface IUserRepository
     {

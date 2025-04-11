@@ -3,7 +3,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Identity;
-using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 
 namespace Services.Implements
@@ -12,24 +12,17 @@ namespace Services.Implements
     {
         private static readonly JwtSecurityTokenHandler _tokenHandler = new();
         private readonly SymmetricSecurityKey _secretKey;
-        private readonly string? _validIssuer;
-        private readonly string? _validAudience;
-        readonly double _expires;
+        private readonly JwtSettings _jwtSettings;
         private readonly UserManager<User> _userManager;
 
-        public TokenService(IConfiguration configuration, UserManager<User> userManager)
+        public TokenService(IOptions<JwtSettings> jwtOptions, UserManager<User> userManager)
         {
-            _userManager = userManager;
-            var jwtSettings = configuration.GetSection("JwtSettings").Get<JwtSettings>()
-                ?? throw new InvalidOperationException("JWT settings are not configured.");
-
-            if (string.IsNullOrEmpty(jwtSettings.Key))
+            _jwtSettings = jwtOptions?.Value ?? throw new ArgumentNullException(nameof(jwtOptions));
+            if (string.IsNullOrEmpty(_jwtSettings.Key))
                 throw new InvalidOperationException("JWT secret key is not configured.");
 
-            _secretKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings.Key));
-            _validIssuer = jwtSettings.ValidIssuer;
-            _validAudience = jwtSettings.ValidAudience;
-            _expires = jwtSettings.Expires;
+            _secretKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtSettings.Key));
+            _userManager = userManager ?? throw new ArgumentNullException(nameof(userManager));
         }
 
         public string GenerateRefreshToken()
@@ -42,16 +35,15 @@ namespace Services.Implements
 
         private async Task<List<Claim>> GetClaimsAsync(User user)
         {
-            // Assuming the user is not null as it's been checked before calling this method.
             var claims = new List<Claim>
-                {
-                    new Claim(ClaimTypes.Name, user.UserName ?? string.Empty),
-                    new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
-                    new Claim(ClaimTypes.Email, user.Email ?? string.Empty),
-                    new Claim("FirstName", user.FirstName ?? string.Empty),
-                    new Claim("LastName", user.LastName ?? string.Empty),
-                    new Claim("Gender", user.Gender ?? string.Empty)
-                };
+            {
+                new Claim(ClaimTypes.Name, user.UserName ?? string.Empty),
+                new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+                new Claim(ClaimTypes.Email, user.Email ?? string.Empty),
+                new Claim("FirstName", user.FirstName ?? string.Empty),
+                new Claim("LastName", user.LastName ?? string.Empty),
+                new Claim("Gender", user.Gender ?? string.Empty)
+            };
 
             var roles = await _userManager.GetRolesAsync(user).ConfigureAwait(false);
             claims.AddRange(roles.Select(role => new Claim(ClaimTypes.Role, role)));
@@ -62,16 +54,18 @@ namespace Services.Implements
         private JwtSecurityToken GenerateTokenOptions(SigningCredentials signingCredentials, List<Claim> claims)
         {
             return new JwtSecurityToken(
-                issuer: _validIssuer,
-                audience: _validAudience,
+                issuer: _jwtSettings.ValidIssuer,
+                audience: _jwtSettings.ValidAudience,
                 claims: claims,
-                expires: DateTime.UtcNow.AddMinutes(_expires),
+                expires: DateTime.UtcNow.AddMinutes(_jwtSettings.Expires),
                 signingCredentials: signingCredentials
             );
         }
 
         public async Task<ApiResult<string>> GenerateToken(User user)
         {
+            //mảng với 64 phần tử kiểu byte -512 bits
+
             if (user == null)
                 return ApiResult<string>.Failure("User is null.");
 

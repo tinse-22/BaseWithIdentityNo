@@ -7,6 +7,7 @@
         Task<ApiResult<UserResponse>> GetByIdAsync(Guid id);
         Task<ApiResult<UserResponse>> UpdateAsync(Guid id, UpdateUserRequest request);
         Task DeleteAsync(Guid id);
+        Task DeleteUsersAsync(List<Guid> ids);
         Task<ApiResult<RevokeRefreshTokenResponse>> RevokeRefreshTokenAsync(RefreshTokenRequest request);
         Task<ApiResult<CurrentUserResponse>> RefreshTokenAsync(RefreshTokenRequest request);
         Task<ApiResult<UserResponse>> LoginAsync(UserLoginRequest request);
