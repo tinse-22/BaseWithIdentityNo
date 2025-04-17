@@ -10,5 +10,12 @@
         public static ApiResult<T> Failure(string error) =>
             new ApiResult<T> { IsSuccess = false, Message = error };
     }
+    public class ApiResult
+    {
+        public bool IsSuccess { get; set; }
+        public string? Message { get; set; }
 
+        public static ApiResult Success() => new ApiResult { IsSuccess = true };
+        public static ApiResult Failure(string error) => new ApiResult { IsSuccess = false, Message = error };
+    }
 }

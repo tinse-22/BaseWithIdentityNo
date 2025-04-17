@@ -3,7 +3,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
-namespace BaseIdentity.Application.Services
+namespace Services.Implementations
 {
     public class UserService : IUserService
     {

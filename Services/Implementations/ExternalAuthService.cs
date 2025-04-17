@@ -1,7 +1,7 @@
 ﻿using System.Security.Claims;
 using Microsoft.AspNetCore.Identity;
 
-namespace BaseIdentity.Application.Services
+namespace Services.Implementations
 {
     public class ExternalAuthService : IExternalAuthService
     {
