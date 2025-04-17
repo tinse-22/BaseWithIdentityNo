@@ -17,7 +17,8 @@ namespace WebAPI.Controllers
             _signInManager = signInManager;
             _externalAuthService = externalAuthService;
         }
-        [HttpPost("register")]
+
+        [HttpPost("register/user")]
         [AllowAnonymous]
         public async Task<IActionResult> Register([FromBody] UserRegisterRequest request)
         {

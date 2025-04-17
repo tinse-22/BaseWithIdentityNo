@@ -3,6 +3,8 @@
     public interface IUserService
     {
         Task<ApiResult<UserResponse>> RegisterAsync(UserRegisterRequest request);
+        Task<ApiResult<UserResponse>> AdminRegisterAsync(AdminCreateUserRequest request);
+
         Task<ApiResult<CurrentUserResponse>> GetCurrentUserAsync();
         Task<ApiResult<UserResponse>> GetByIdAsync(Guid id);
         Task<ApiResult<UserResponse>> UpdateAsync(Guid id, UpdateUserRequest request);

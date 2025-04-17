@@ -1,5 +1,4 @@
-﻿using System.ComponentModel;
-using BusinessObjects.Common;
+﻿using BusinessObjects.Common;
 
 namespace DTOs.UserDTOs.Request
 {

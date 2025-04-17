@@ -26,6 +26,60 @@ namespace BaseIdentity.Application.Services
             _logger = logger;
             _unitOfWork = unitOfWork;
         }
+        public async Task<ApiResult<UserResponse>> AdminRegisterAsync(AdminCreateUserRequest request)
+        {
+            // 1. Kiểm tra email tồn tại
+            if (await _userManager.FindByEmailAsync(request.Email) != null)
+                return ApiResult<UserResponse>.Failure("Email đã được sử dụng");
+
+            // 2. Khởi tạo User mới
+            var newUser = new User
+            {
+                FirstName = request.FirstName,
+                LastName = request.LastName,
+                Email = request.Email,
+                UserName = GenerateUserName(request.FirstName ?? "", request.LastName ?? ""),
+                Gender = request.Gender?.ToString(),
+                CreateAt = DateTime.UtcNow,
+                UpdateAt = DateTime.UtcNow
+            };
+
+            using var tx = await _unitOfWork.BeginTransactionAsync();
+            try
+            {
+                // 3. Tạo tài khoản với mật khẩu
+                var createResult = await _userManager.CreateAsync(newUser, request.Password);
+                if (!createResult.Succeeded)
+                    return ApiResult<UserResponse>.Failure(string.Join(", ", createResult.Errors.Select(e => e.Description)));
+
+                // 4. Gán role: nếu Roles null hoặc rỗng → gán "USER"
+                var roles = request.Roles != null && request.Roles.Any()
+                            ? request.Roles
+                            : new List<string> { "USER" };
+
+                var roleRes = await _userManager.AddToRolesAsync(newUser, roles);
+                if (!roleRes.Succeeded)
+                {
+                    var allErrors = string.Join("; ", roleRes.Errors.Select(e => e.Description));
+                    return ApiResult<UserResponse>.Failure(allErrors);
+                }
+
+                await tx.CommitAsync();
+            }
+            catch (Exception ex)
+            {
+                await tx.RollbackAsync();
+                _logger.LogError(ex, "AdminRegisterAsync failed for {Email}", request.Email);
+                return ApiResult<UserResponse>.Failure("Lỗi nội bộ, vui lòng thử lại");
+            }
+
+            // 5. Tạo token và trả về
+            var token = await _tokenServices.GenerateToken(newUser);
+            var userResp = await MapUserToUserResponseAsync(newUser,
+                                token.IsSuccess ? token.Data : null);
+            return ApiResult<UserResponse>.Success(userResp);
+        }
+
 
         public async Task<ApiResult<UserResponse>> RegisterAsync(UserRegisterRequest request)
         {
@@ -46,10 +100,6 @@ namespace BaseIdentity.Application.Services
                 Gender = request.Gender.ToString(),
                 CreateAt = DateTime.UtcNow,
                 UpdateAt = DateTime.UtcNow,
-                // Fix for the CS1061 error: The method `GenerateUserName` is defined as returning a `string`,
-                // but it is being awaited as if it were an asynchronous method. To fix this, remove the `await` keyword
-                // and call the method directly.
-
                 UserName = GenerateUserName(request.FirstName ?? string.Empty, request.LastName ?? string.Empty)
 
             };
@@ -270,7 +320,6 @@ namespace BaseIdentity.Application.Services
             return ApiResult<UserResponse>.Success(userResponse);
         }
 
-
         public async Task<ApiResult<UserResponse>> UpdateCurrentUserAsync(UpdateUserRequest request)
         {
             var userId = _currentUserService.GetUserId();
@@ -391,7 +440,6 @@ namespace BaseIdentity.Application.Services
                 }
             }
         }
-
 
         public async Task<UserResponse> CreateOrUpdateGoogleUserAsync(GoogleUserInfo googleUserInfo)
         {
@@ -544,7 +592,6 @@ namespace BaseIdentity.Application.Services
                 Roles = roles.ToList()
             };
         }
-
 
         private CurrentUserResponse MapUserToCurrentUserResponse(User user, string? accessToken = null)
         {
