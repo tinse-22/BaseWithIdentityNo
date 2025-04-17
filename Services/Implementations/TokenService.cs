@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 
-namespace Services.Implements
+namespace Services.Implementations
 {
     public class TokenService : ITokenService
     {

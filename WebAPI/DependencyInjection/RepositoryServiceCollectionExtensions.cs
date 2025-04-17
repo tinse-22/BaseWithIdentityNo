@@ -1,4 +1,6 @@
 ﻿// RepositoryServiceCollectionExtensions.cs
+using Services.Implementations;
+
 namespace WebAPI.DependencyInjection
 {
     public static class RepositoryServiceCollectionExtensions
