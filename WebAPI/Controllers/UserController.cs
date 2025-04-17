@@ -5,7 +5,7 @@ namespace WebAPI.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize(Roles = "ADMIN")]
+    [Authorize(Roles = "ADMIN")]  // <-- mọi action ở đây đều yêu cầu role=ADMIN
     public class UserController : ControllerBase
     {
         private readonly IUserService _userService;
@@ -25,7 +25,6 @@ namespace WebAPI.Controllers
             }
             return Ok(response);
         }
-
         [HttpGet]
         public async Task<IActionResult> GetAllUsers([FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 10)
         {
@@ -48,7 +47,9 @@ namespace WebAPI.Controllers
         [HttpDelete("bulk")]
         public async Task<IActionResult> DeleteUser([FromQuery] List<Guid> ids)
         {
-            await _userService.DeleteUsersAsync(ids);
+            var result = await _userService.DeleteUsersAsync(ids);
+            if (!result.IsSuccess)
+                return BadRequest(result);   // Trả về 400 cùng message "User {id} not found"
             return NoContent();
         }
 

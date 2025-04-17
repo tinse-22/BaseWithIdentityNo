@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
+using System.Security.Claims;
 using System.Text;
 namespace WebAPI.DependencyInjection
 {
@@ -10,6 +11,8 @@ namespace WebAPI.DependencyInjection
             services.AddIdentity<User, Role>(options =>
             {
                 // Cấu hình Identity
+                options.ClaimsIdentity.UserNameClaimType = ClaimTypes.Name;
+                options.ClaimsIdentity.RoleClaimType = ClaimTypes.Role;
                 options.Lockout.MaxFailedAccessAttempts = 5;
                 options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(5);
                 options.Lockout.AllowedForNewUsers = true;
