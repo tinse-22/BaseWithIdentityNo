@@ -51,5 +51,41 @@ namespace WebAPI.Controllers
             await _userService.DeleteUsersAsync(ids);
             return NoContent();
         }
+
+        // Endpoint lock user
+        [HttpPut("lock")]
+        public async Task<IActionResult> LockUser([FromQuery] Guid id)
+        {
+            var response = await _userService.LockUserAsync(id);
+            if (!response.IsSuccess)
+            {
+                return BadRequest(response);
+            }
+            return Ok(response);
+        }
+
+        // Endpoint unlock user
+        [HttpPut("unlock")]
+        public async Task<IActionResult> UnlockUser([FromQuery] Guid id)
+        {
+            var response = await _userService.UnlockUserAsync(id);
+            if (!response.IsSuccess)
+            {
+                return BadRequest(response);
+            }
+            return Ok(response);
+        }
+
+        [HttpPost("admin/register")]
+        public async Task<IActionResult> RegisterAdmin([FromBody] AdminCreateUserRequest request)
+        {
+            var result = await _userService.AdminRegisterAsync(request);
+            if (!result.IsSuccess)
+                return BadRequest(result);
+
+            return CreatedAtAction(nameof(GetUserById),
+                                   new { id = result.Data!.Id },
+                                   result);
+        }
     }
 }
