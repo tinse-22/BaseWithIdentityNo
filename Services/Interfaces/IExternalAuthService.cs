@@ -2,7 +2,7 @@
 {
     public interface IExternalAuthService
     {
-        Task<ApiResult<string>> ProcessGoogleLoginAsync();
+        Task<ApiResult<UserResponse>> ProcessGoogleLoginAsync();
 
     }
 }

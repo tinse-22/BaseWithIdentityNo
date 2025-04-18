@@ -4,11 +4,7 @@ namespace Services.Extensions.Mapers
 {
     public static class MappingExtensions
     {
-        public static async Task<UserResponse> ToUserResponseAsync(
-            this User user,
-            UserManager<User> userManager,
-            string? accessToken = null,
-            string? refreshToken = null)
+        public static async Task<UserResponse> ToUserResponseAsync(this User user, UserManager<User> userManager, string? accessToken = null, string? refreshToken = null)
         {
             var roles = await userManager.GetRolesAsync(user);
             return new UserResponse
@@ -27,9 +23,7 @@ namespace Services.Extensions.Mapers
             };
         }
 
-        public static CurrentUserResponse ToCurrentUserResponse(
-            this User user,
-            string? accessToken = null)
+        public static CurrentUserResponse ToCurrentUserResponse(this User user, string? accessToken = null)
         {
             return new CurrentUserResponse
             {

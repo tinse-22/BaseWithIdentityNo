@@ -6,86 +6,33 @@ namespace Services.Implementations
     public class ExternalAuthService : IExternalAuthService
     {
         private readonly SignInManager<User> _signInManager;
-        private readonly UserManager<User> _userManager;
-        private readonly ITokenService _tokenService;
+        private readonly IUserService _userService;
 
-        public ExternalAuthService(
-            SignInManager<User> signInManager,
-            UserManager<User> userManager,
-            ITokenService tokenService)
+        public ExternalAuthService(SignInManager<User> signInManager, IUserService userService)
         {
             _signInManager = signInManager;
-            _userManager = userManager;
-            _tokenService = tokenService;
+            _userService = userService;
         }
 
-        public async Task<ApiResult<string>> ProcessGoogleLoginAsync()
+        public async Task<ApiResult<UserResponse>> ProcessGoogleLoginAsync()
         {
-            // Retrieve external login info from Google
-            var info = await _signInManager.GetExternalLoginInfoAsync().ConfigureAwait(false);
-            if (info == null)
-            {
-                return ApiResult<string>.Failure("Unable to retrieve external login info from Google.");
-            }
+            // Lấy thông tin login từ Google
+            var result = await _signInManager.GetExternalLoginInfoAsync();
+            if (result == null)
+                return ApiResult<UserResponse>.Failure("Google login information not found");
 
-            // Attempt to sign in with the external login
-            var signInResult = await _signInManager
-                .ExternalLoginSignInAsync(info.LoginProvider, info.ProviderKey, isPersistent: false)
-                .ConfigureAwait(false);
+            // Lấy email, tên từ claims
+            var email = result.Principal.FindFirstValue(ClaimTypes.Email);
+            var first = result.Principal.FindFirstValue(ClaimTypes.GivenName);
+            var last = result.Principal.FindFirstValue(ClaimTypes.Surname);
+            var info = new GoogleUserInfo { Email = email, FirstName = first, LastName = last };
 
-            User user;
-            if (!signInResult.Succeeded)
-            {
-                // Retrieve email from external login info
-                var email = info.Principal.FindFirstValue(ClaimTypes.Email);
-                if (string.IsNullOrEmpty(email))
-                {
-                    return ApiResult<string>.Failure("Email not present in Google account.");
-                }
+            // Tạo hoặc cập nhật user, đồng thời gán role và sinh token
+            var userResp = await _userService.CreateOrUpdateGoogleUserAsync(info);
+            if (userResp == null)
+                return ApiResult<UserResponse>.Failure("Cannot create or update Google user");
 
-                // Check if the user already exists
-                user = await _userManager.FindByEmailAsync(email).ConfigureAwait(false);
-                if (user == null)
-                {
-                    // Create a new user if it does not exist
-                    user = new User
-                    {
-                        UserName = email,
-                        Email = email
-                    };
-
-                    var createResult = await _userManager.CreateAsync(user).ConfigureAwait(false);
-                    if (!createResult.Succeeded)
-                    {
-                        var errorMsg = string.Join(", ", createResult.Errors.Select(e => e.Description));
-                        return ApiResult<string>.Failure(errorMsg);
-                    }
-                }
-
-                // Associate the external login with the user
-                var addLoginResult = await _userManager.AddLoginAsync(user, info).ConfigureAwait(false);
-                if (!addLoginResult.Succeeded)
-                {
-                    var errorMsg = string.Join(", ", addLoginResult.Errors.Select(e => e.Description));
-                    return ApiResult<string>.Failure(errorMsg);
-                }
-
-                // Sign in the user
-                await _signInManager.SignInAsync(user, isPersistent: false).ConfigureAwait(false);
-            }
-            else
-            {
-                // If external sign in succeeded, get the linked user
-                user = await _userManager.FindByLoginAsync(info.LoginProvider, info.ProviderKey).ConfigureAwait(false);
-                if (user == null)
-                {
-                    return ApiResult<string>.Failure("No user associated with the provided Google login.");
-                }
-            }
-
-            // Generate a JWT token for the user
-            var tokenResult = await _tokenService.GenerateToken(user).ConfigureAwait(false);
-            return tokenResult;
+            return ApiResult<UserResponse>.Success(userResp);
         }
     }
 
