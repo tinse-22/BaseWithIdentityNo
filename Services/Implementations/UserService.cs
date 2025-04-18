@@ -1,5 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations;
-using Microsoft.AspNetCore.Identity;
+﻿using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Services.Extensions;
@@ -29,213 +28,150 @@ namespace Services.Implementations
             _logger = logger;
         }
 
-        // 1. Đăng ký bình thường
-        public Task<ApiResult<UserResponse>> RegisterAsync(UserRegisterRequest request) =>
+        public Task<ApiResult<UserResponse>> RegisterAsync(UserRegisterRequest req) =>
             _unitOfWork.ExecuteTransactionAsync(async () =>
             {
-                if (await _userManager.FindByEmailAsync(request.Email) != null)
-                {
-                    _logger.LogWarning("Attempt to register with existing email: {Email}", request.Email);
+                if (await _userManager.ExistsByEmailAsync(req.Email))
                     return ApiResult<UserResponse>.Failure("Email đã được sử dụng");
-                }
-                _logger.LogInformation("Register user: {Email}", request.Email);
 
-                var newUser = new User
-                {
-                    FirstName = request.FirstName,
-                    LastName = request.LastName,
-                    Email = request.Email,
-                    Gender = request.Gender.ToString(),
-                    CreateAt = DateTime.UtcNow,
-                    UpdateAt = DateTime.UtcNow,
-                    UserName = GenerateUsername(request.FirstName, request.LastName)
-                };
+                _logger.LogInformation("Register user: {Email}", req.Email);
 
-                // Tạo user và gán role USER
-                var cr = await _userManager.CreateAsync(newUser, request.Password).ConfigureAwait(false);
-                if (!cr.Succeeded)
-                    return ApiResult<UserResponse>.Failure(
-                        string.Join(", ", cr.Errors.Select(e => e.Description)));
+                var user = req.ToDomainUser();
+                user.UserName = req.GenerateUsername();
 
-                var rr = await _userManager.AddToRoleAsync(newUser, "USER");
-                if (!rr.Succeeded)
-                    return ApiResult<UserResponse>.Failure(
-                        string.Join(", ", rr.Errors.Select(e => e.Description)));
+                var create = await _userManager.CreateUserAsync(user, req.Password);
+                if (!create.Succeeded)
+                    return ApiResult<UserResponse>.Failure(create.ErrorMessage);
 
-                // Tạo token và lưu refresh-token
-                var tokenRes = await _tokenService.GenerateToken(newUser);
-                var refreshToken = _tokenService.GenerateRefreshToken();
-                await _userManager.SetAuthenticationTokenAsync(
-                    newUser, "MyApp", "RefreshToken", refreshToken);
+                await _userManager.AddDefaultRoleAsync(user);
+                var token = await _tokenService.GenerateToken(user);
+                var refresh = _tokenService.GenerateRefreshToken();
+                await _userManager.SetRefreshTokenAsync(user, refresh);
 
-                var userResp = await newUser.ToUserResponseAsync(
-                    _userManager, tokenRes.Data, refreshToken);
-                return ApiResult<UserResponse>.Success(userResp);
+                return ApiResult<UserResponse>.Success(
+                    await user.BuildResponseAsync(_userManager, token.Data, refresh));
             });
 
-        // 2. Đăng ký bằng Admin
-        public Task<ApiResult<UserResponse>> AdminRegisterAsync(AdminCreateUserRequest request) =>
+        public Task<ApiResult<UserResponse>> AdminRegisterAsync(AdminCreateUserRequest req) =>
             _unitOfWork.ExecuteTransactionAsync(async () =>
             {
                 if (!_currentUserService.IsAdmin())
                     return ApiResult<UserResponse>.Failure("Forbidden: Only Admins can register users");
-                _logger.LogInformation("AdminRegister user: {Email}", request.Email);
-                if (await _userManager.FindByEmailAsync(request.Email) != null)
+
+                if (await _userManager.ExistsByEmailAsync(req.Email))
                     return ApiResult<UserResponse>.Failure("Email đã được sử dụng");
 
-                var newUser = new User
-                {
-                    FirstName = request.FirstName,
-                    LastName = request.LastName,
-                    Email = request.Email,
-                    Gender = request.Gender?.ToString(),
-                    CreateAt = DateTime.UtcNow,
-                    UpdateAt = DateTime.UtcNow,
-                    UserName = GenerateUsername(request.FirstName, request.LastName)
-                };
+                _logger.LogInformation("AdminRegister user: {Email}", req.Email);
+                var user = req.ToDomainUser();
+                user.UserName = req.GenerateUsername();
 
-                var cr = await _userManager.CreateAsync(newUser, request.Password);
-                if (!cr.Succeeded)
-                    return ApiResult<UserResponse>.Failure(
-                        string.Join(", ", cr.Errors.Select(e => e.Description)));
+                var create = await _userManager.CreateUserAsync(user, req.Password);
+                if (!create.Succeeded)
+                    return ApiResult<UserResponse>.Failure(create.ErrorMessage);
 
-                var roles = request.Roles?.Any() == true
-                    ? request.Roles
-                    : new List<string> { "USER" };
+                await _userManager.AddRolesAsync(user, req.Roles);
+                var token = await _tokenService.GenerateToken(user);
 
-                var rr = await _userManager.AddToRolesAsync(newUser, roles);
-                if (!rr.Succeeded)
-                    return ApiResult<UserResponse>.Failure(
-                        string.Join("; ", rr.Errors.Select(e => e.Description)));
-
-                var tokenRes = await _tokenService.GenerateToken(newUser);
-                var userResp = await newUser.ToUserResponseAsync(
-                    _userManager, tokenRes.Data);
-
-                return ApiResult<UserResponse>.Success(userResp);
+                return ApiResult<UserResponse>.Success(
+                    await user.BuildResponseAsync(_userManager, token.Data));
             });
 
-        // 3. Đăng nhập
-        public async Task<ApiResult<UserResponse>> LoginAsync(UserLoginRequest request)
+        public async Task<ApiResult<UserResponse>> LoginAsync(UserLoginRequest req)
         {
-            _logger.LogInformation("Login attempt: {Email}", request.Email);
-            var user = await _userManager.FindByEmailAsync(request.Email);
-            if (user == null || !await _userManager.CheckPasswordAsync(user, request.Password))
-            {
-                _logger.LogWarning("Invalid login for {Email}", request.Email);
+            _logger.LogInformation("Login attempt: {Email}", req.Email);
+            // Validate credentials
+            var (isValid, user) = await _userManager.ValidateCredentialsAsync(req.Email, req.Password);
+            if (!isValid)
                 return ApiResult<UserResponse>.Failure("Invalid user or password");
-            }
 
-            if (await _userManager.IsLockedOutAsync(user))
+            // Check lockout
+            if (await _userManager.IsUserLockedOutAsync(user))
                 return ApiResult<UserResponse>.Failure("Account is locked");
 
-            await _userManager.ResetAccessFailedCountAsync(user);
-            var accessRes = await _tokenService.GenerateToken(user);
-            var refreshToken = _tokenService.GenerateRefreshToken();
-            await _userManager.SetAuthenticationTokenAsync(
-                user, "MyApp", "RefreshToken", refreshToken);
+            // Reset failed count and generate token
+            await _userManager.ResetAccessFailedAsync(user);
+            var token = await _tokenService.GenerateToken(user);
+            var refresh = _tokenService.GenerateRefreshToken();
+            await _userManager.SetRefreshTokenAsync(user, refresh);
 
-            var userResp = await user.ToUserResponseAsync(
-                _userManager, accessRes.Data, refreshToken);
-            return ApiResult<UserResponse>.Success(userResp);
+            return ApiResult<UserResponse>.Success(
+                await user.BuildResponseAsync(_userManager, token.Data, refresh));
         }
 
-        // 4. Lấy theo ID
         public async Task<ApiResult<UserResponse>> GetByIdAsync(Guid id)
         {
-            var user = await _userManager.Users
-                .AsNoTracking()
-                .FirstOrDefaultAsync(u => u.Id == id);
+            var user = await _userManager.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == id);
             if (user == null)
                 return ApiResult<UserResponse>.Failure("User not found");
 
-            var resp = await user.ToUserResponseAsync(_userManager);
-            return ApiResult<UserResponse>.Success(resp);
+            return ApiResult<UserResponse>.Success(
+                await user.BuildResponseAsync(_userManager));
         }
 
-        // 5. Lấy current user
         public async Task<ApiResult<CurrentUserResponse>> GetCurrentUserAsync()
         {
             var uid = _currentUserService.GetUserId();
-            var user = await _userManager.Users
-                .AsNoTracking()
-                .FirstOrDefaultAsync(u => u.Id.ToString() == uid);
+            var user = await _userManager.FindByIdAsync(uid);
             if (user == null)
                 return ApiResult<CurrentUserResponse>.Failure("User not found");
 
-            var tokenRes = await _tokenService.GenerateToken(user);
-            var resp = user.ToCurrentUserResponse(tokenRes.Data);
-            return ApiResult<CurrentUserResponse>.Success(resp);
+            var token = await _tokenService.GenerateToken(user);
+            return ApiResult<CurrentUserResponse>.Success(
+                user.BuildCurrentResponse(token.Data));
         }
 
-        // 6. Refresh access token
-        public async Task<ApiResult<CurrentUserResponse>> RefreshTokenAsync(RefreshTokenRequest request)
+        public async Task<ApiResult<CurrentUserResponse>> RefreshTokenAsync(RefreshTokenRequest req)
         {
             var uid = _currentUserService.GetUserId();
             var user = await _userManager.FindByIdAsync(uid);
-            var stored = await _userManager.GetAuthenticationTokenAsync(
-                user, "MyApp", "RefreshToken");
-            if (stored != request.RefreshToken)
+            if (!await _userManager.ValidateRefreshTokenAsync(user, req.RefreshToken))
                 return ApiResult<CurrentUserResponse>.Failure("Invalid refresh token");
 
-            var accessRes = await _tokenService.GenerateToken(user);
-            var resp = user.ToCurrentUserResponse(accessRes.Data);
-            return ApiResult<CurrentUserResponse>.Success(resp);
+            var token = await _tokenService.GenerateToken(user);
+            return ApiResult<CurrentUserResponse>.Success(
+                user.BuildCurrentResponse(token.Data));
         }
 
-        // 7. Revoke refresh token
-        public async Task<ApiResult<RevokeRefreshTokenResponse>> RevokeRefreshTokenAsync(RefreshTokenRequest request)
+        public async Task<ApiResult<RevokeRefreshTokenResponse>> RevokeRefreshTokenAsync(RefreshTokenRequest req)
         {
             var uid = _currentUserService.GetUserId();
             var user = await _userManager.FindByIdAsync(uid);
-            var stored = await _userManager.GetAuthenticationTokenAsync(
-                user, "MyApp", "RefreshToken");
-            if (stored != request.RefreshToken)
+            if (!await _userManager.ValidateRefreshTokenAsync(user, req.RefreshToken))
                 return ApiResult<RevokeRefreshTokenResponse>.Failure("Invalid refresh token");
 
-            var rem = await _userManager.RemoveAuthenticationTokenAsync(
-                user, "MyApp", "RefreshToken");
+            var rem = await _userManager.RemoveRefreshTokenAsync(user);
             if (!rem.Succeeded)
-                return ApiResult<RevokeRefreshTokenResponse>.Failure(
-                    string.Join(", ", rem.Errors.Select(e => e.Description)));
+                return ApiResult<RevokeRefreshTokenResponse>.Failure(rem.ErrorMessage);
 
             return ApiResult<RevokeRefreshTokenResponse>.Success(
                 new RevokeRefreshTokenResponse { Message = "Revoked" });
         }
 
-        // 8. Đổi mật khẩu
-        public async Task<ApiResult<string>> ChangePasswordAsync(ChangePasswordRequest request)
+        public async Task<ApiResult<string>> ChangePasswordAsync(ChangePasswordRequest req)
         {
             var uid = _currentUserService.GetUserId();
             var user = await _userManager.FindByIdAsync(uid);
-            var res = await _userManager.ChangePasswordAsync(
-                user, request.OldPassword, request.NewPassword);
+            var res = await _userManager.ChangeUserPasswordAsync(user, req.OldPassword, req.NewPassword);
             if (!res.Succeeded)
-                return ApiResult<string>.Failure(
-                    string.Join(", ", res.Errors.Select(e => e.Description)));
+                return ApiResult<string>.Failure(res.ErrorMessage);
 
             await _userManager.UpdateSecurityStampAsync(user);
             return ApiResult<string>.Success("Password changed");
         }
 
-        // 9. Cập nhật user (Admin có thể thay role)
-        public Task<ApiResult<UserResponse>> UpdateAsync(
-            Guid id, UpdateUserRequest request) =>
+        public Task<ApiResult<UserResponse>> UpdateAsync(Guid id, UpdateUserRequest req) =>
             _unitOfWork.ExecuteTransactionAsync(async () =>
             {
                 var user = await _userManager.FindByIdAsync(id.ToString());
                 if (user == null)
                     return ApiResult<UserResponse>.Failure("User not found");
 
-                UpdateFields(user, request);
+                req.ApplyToDomain(user);
                 user.UpdateAt = DateTime.UtcNow;
 
-                if (request.Roles?.Any() == true &&
-                    _currentUserService.IsAdmin())
+                if (req.Roles?.Any() == true && _currentUserService.IsAdmin())
                 {
-                    var oldRoles = await _userManager.GetRolesAsync(user);
-                    await _userManager.RemoveFromRolesAsync(user, oldRoles);
-                    await _userManager.AddToRolesAsync(user, request.Roles);
+                    await _userManager.UpdateRolesAsync(user, req.Roles);
                 }
 
                 var upd = await _userManager.UpdateAsync(user);
@@ -243,12 +179,11 @@ namespace Services.Implementations
                     return ApiResult<UserResponse>.Failure(
                         string.Join(", ", upd.Errors.Select(e => e.Description)));
 
-                var resp = await user.ToUserResponseAsync(_userManager);
-                return ApiResult<UserResponse>.Success(resp);
+                return ApiResult<UserResponse>.Success(
+                    await user.BuildResponseAsync(_userManager));
             });
 
-        // 10. Cập nhật profile (không thay đổi role)
-        public Task<ApiResult<UserResponse>> UpdateCurrentUserAsync(UpdateUserRequest request) =>
+        public Task<ApiResult<UserResponse>> UpdateCurrentUserAsync(UpdateUserRequest req) =>
             _unitOfWork.ExecuteTransactionAsync(async () =>
             {
                 var uid = _currentUserService.GetUserId();
@@ -256,7 +191,7 @@ namespace Services.Implementations
                 if (user == null)
                     return ApiResult<UserResponse>.Failure("User not found");
 
-                UpdateFields(user, request);
+                req.ApplyToDomain(user);
                 user.UpdateAt = DateTime.UtcNow;
 
                 var upd = await _userManager.UpdateAsync(user);
@@ -264,123 +199,85 @@ namespace Services.Implementations
                     return ApiResult<UserResponse>.Failure(
                         string.Join(", ", upd.Errors.Select(e => e.Description)));
 
-                var resp = await user.ToUserResponseAsync(_userManager);
-                return ApiResult<UserResponse>.Success(resp);
+                return ApiResult<UserResponse>.Success(
+                    await user.BuildResponseAsync(_userManager));
             });
 
-        // 11. Khóa/Mở khóa user
-        public async Task<ApiResult<UserResponse>> LockUserAsync(Guid id) =>
-            await ChangeLockoutAsync(id, true, DateTimeOffset.MaxValue);
+        public Task<ApiResult<UserResponse>> LockUserAsync(Guid id) =>
+            ChangeLockoutAsync(id, true, DateTimeOffset.MaxValue);
 
-        public async Task<ApiResult<UserResponse>> UnlockUserAsync(Guid id) =>
-            await ChangeLockoutAsync(id, true, DateTimeOffset.UtcNow);
+        public Task<ApiResult<UserResponse>> UnlockUserAsync(Guid id) =>
+            ChangeLockoutAsync(id, false, DateTimeOffset.UtcNow);
 
-        private async Task<ApiResult<UserResponse>> ChangeLockoutAsync(
-            Guid id, bool enable, DateTimeOffset until)
+        private async Task<ApiResult<UserResponse>> ChangeLockoutAsync(Guid id, bool enable, DateTimeOffset until)
         {
             var user = await _userManager.FindByIdAsync(id.ToString());
             if (user == null)
                 return ApiResult<UserResponse>.Failure("User not found");
 
-            await _userManager.SetLockoutEnabledAsync(user, enable);
-            var res = await _userManager.SetLockoutEndDateAsync(user, until);
+            var res = await _userManager.SetLockoutAsync(user, enable, until);
             if (!res.Succeeded)
-                return ApiResult<UserResponse>.Failure(
-                    string.Join(", ", res.Errors.Select(e => e.Description)));
+                return ApiResult<UserResponse>.Failure(res.ErrorMessage);
 
-            await _userManager.UpdateAsync(user);
-            var resp = await user.ToUserResponseAsync(_userManager);
-            return ApiResult<UserResponse>.Success(resp);
+            return ApiResult<UserResponse>.Success(
+                await user.BuildResponseAsync(_userManager));
         }
 
-        // 12. Xóa user đơn lẻ hoặc hàng loạt
         public Task<ApiResult<object>> DeleteUsersAsync(List<Guid> ids) =>
-    _unitOfWork.ExecuteTransactionAsync(async () =>
-    {
-        foreach (var id in ids)
-        {
-            var usr = await _userManager.FindByIdAsync(id.ToString());
-            if (usr == null)
-                return ApiResult<object>.Failure($"User {id} not found");
+            _unitOfWork.ExecuteTransactionAsync(async () =>
+            {
+                foreach (var id in ids)
+                {
+                    var user = await _userManager.FindByIdAsync(id.ToString());
+                    if (user == null)
+                        return ApiResult<object>.Failure($"User {id} not found");
 
-            var dr = await _userManager.DeleteAsync(usr);
-            if (!dr.Succeeded)
-                return ApiResult<object>.Failure(
-                    string.Join(", ", dr.Errors.Select(e => e.Description)));
-        }
-        return ApiResult<object>.Success(null);
-    });
+                    var del = await _userManager.DeleteAsync(user);
+                    if (!del.Succeeded)
+                        return ApiResult<object>.Failure(
+                            string.Join(", ", del.Errors.Select(e => e.Description)));
+                }
+                return ApiResult<object>.Success(null);
+            });
 
-        // 13. Google OAuth
-        public async Task<UserResponse> CreateOrUpdateGoogleUserAsync(
-            GoogleUserInfo info)
+        public async Task<UserResponse> CreateOrUpdateGoogleUserAsync(GoogleUserInfo info)
         {
             var user = await _userManager.FindByEmailAsync(info.Email);
             var isNew = user == null;
 
             if (isNew)
             {
-                user = new User
-                {
-                    UserName = info.Email,
-                    Email = info.Email,
-                    FirstName = info.FirstName,
-                    LastName = info.LastName,
-                    CreateAt = DateTime.UtcNow,
-                    UpdateAt = DateTime.UtcNow
-                };
-                await _userManager.CreateAsync(user);
-                await _userManager.AddToRoleAsync(user, "USER");
+                // Tạo mới user và gán role ngay lập tức
+                user = info.ToDomainUser();
+                var createRes = await _userManager.CreateUserAsync(user);
+                if (!createRes.Succeeded)
+                    return null; // hoặc handle error phù hợp
+
+                await _userManager.AddDefaultRoleAsync(user);
             }
             else
             {
-                var changed = false;
-                if (user.FirstName != info.FirstName)
-                { user.FirstName = info.FirstName; changed = true; }
-                if (user.LastName != info.LastName)
-                { user.LastName = info.LastName; changed = true; }
-                if (changed)
-                {
-                    user.UpdateAt = DateTime.UtcNow;
-                    await _userManager.UpdateAsync(user);
-                }
+                // Đảm bảo user cũ cũng có role USER
                 if (!await _userManager.IsInRoleAsync(user, "USER"))
-                    await _userManager.AddToRoleAsync(user, "USER");
+                    await _userManager.AddDefaultRoleAsync(user);
+
+                // Cập nhật thông tin từ Google nếu cần
+                var updated = info.MergeGoogleInfo(user);
+                if (updated)
+                    await _userManager.UpdateAsync(user);
             }
 
-            var tokenRes = await _tokenService.GenerateToken(user);
-            var refreshToken = _tokenService.GenerateRefreshToken();
-            await _userManager.SetAuthenticationTokenAsync(
-                user, "MyApp", "RefreshToken", refreshToken);
+            var token = await _tokenService.GenerateToken(user);
+            var refresh = _tokenService.GenerateRefreshToken();
+            await _userManager.SetRefreshTokenAsync(user, refresh);
 
-            return await user.ToUserResponseAsync(
-                _userManager, tokenRes.Data, refreshToken);
+            return await user.BuildResponseAsync(_userManager, token.Data, refresh);
         }
 
-        // 14. Lấy danh sách người dùng phân trang
-        public async Task<ApiResult<PagedList<UserDetailsDTO>>> GetUsersAsync(
-            int pageNumber, int pageSize)
+        public async Task<ApiResult<PagedList<UserDetailsDTO>>> GetUsersAsync(int page, int size)
         {
-            var list = await _unitOfWork.UserRepository
-                .GetUserDetailsAsync(pageNumber, pageSize);
+            var list = await _unitOfWork.UserRepository.GetUserDetailsAsync(page, size);
             return ApiResult<PagedList<UserDetailsDTO>>.Success(list);
-        }
-
-        // Helper methods
-        private static string GenerateUsername(string first, string last) =>
-            $"{first}{last}{Guid.NewGuid():N}".ToLower();
-
-        private static void UpdateFields(User user, UpdateUserRequest req)
-        {
-            if (!string.IsNullOrEmpty(req.FirstName)) user.FirstName = req.FirstName;
-            if (!string.IsNullOrEmpty(req.LastName)) user.LastName = req.LastName;
-            if (!string.IsNullOrEmpty(req.Email) &&
-                new EmailAddressAttribute().IsValid(req.Email))
-                user.Email = req.Email;
-            if (!string.IsNullOrEmpty(req.PhoneNumbers))
-                user.PhoneNumber = req.PhoneNumbers;
-            if (!string.IsNullOrEmpty(req.Gender.ToString()))
-                user.Gender = req.Gender.ToString();
         }
     }
 }
