@@ -103,8 +103,9 @@ namespace WebAPI.Controllers
         {
             var result = await _externalAuthService.ProcessGoogleLoginAsync();
             if (!result.IsSuccess)
-                return BadRequest();
-            return Ok(result.Data);
+                return BadRequest(result);
+
+            return Ok(result);   // bây giờ là ApiResult<UserResponse> chứa token + roles
         }
     }
 }

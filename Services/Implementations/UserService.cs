@@ -14,12 +14,7 @@ namespace Services.Implementations
         private readonly IUnitOfWork _unitOfWork;
         private readonly ILogger<UserService> _logger;
 
-        public UserService(
-            UserManager<User> userManager,
-            ITokenService tokenService,
-            ICurrentUserService currentUserService,
-            IUnitOfWork unitOfWork,
-            ILogger<UserService> logger)
+        public UserService(UserManager<User> userManager, ITokenService tokenService, ICurrentUserService currentUserService, IUnitOfWork unitOfWork, ILogger<UserService> logger)
         {
             _userManager = userManager;
             _tokenService = tokenService;

@@ -5,7 +5,7 @@ namespace WebAPI.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize(Roles = "ADMIN")]  // <-- mọi action ở đây đều yêu cầu role=ADMIN
+    //[Authorize(Roles = "ADMIN")]  // <-- mọi action ở đây đều yêu cầu role=ADMIN
     public class UserController : ControllerBase
     {
         private readonly IUserService _userService;
