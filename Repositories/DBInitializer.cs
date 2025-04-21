@@ -167,6 +167,5 @@ namespace Repositories
                 Console.WriteLine($"User {user.Email} already exists.");
             }
         }
-
     }
 }

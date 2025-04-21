@@ -1,4 +1,4 @@
-﻿global using WebAPI.DependencyInjection;
+﻿global using WebAPI.Extensions;
 global using Repositories;
 global using Repositories.WorkSeeds.Interfaces;
 global using Repositories.WorkSeeds;
@@ -9,3 +9,6 @@ global using DTOs.UserDTOs.Request;
 global using Microsoft.AspNetCore.Identity;
 global using Repositories.Interfaces;
 global using Services.Interfaces;
+global using Services.Commons.Gmail;
+global using Services.Implementations;
+global using System.Security.Claims;

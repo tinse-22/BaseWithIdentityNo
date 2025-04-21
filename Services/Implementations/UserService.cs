@@ -202,7 +202,7 @@ namespace Services.Implementations
             ChangeLockoutAsync(id, true, DateTimeOffset.MaxValue);
 
         public Task<ApiResult<UserResponse>> UnlockUserAsync(Guid id) =>
-            ChangeLockoutAsync(id, false, DateTimeOffset.UtcNow);
+            ChangeLockoutAsync(id, true, DateTimeOffset.UtcNow);
 
         private async Task<ApiResult<UserResponse>> ChangeLockoutAsync(Guid id, bool enable, DateTimeOffset until)
         {

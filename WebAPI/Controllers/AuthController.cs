@@ -1,6 +1,6 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-
+using Services.Commons.Gmail;   // IEmailService
 namespace WebAPI.Controllers
 {
     [Route("api/[controller]")]
@@ -10,102 +10,177 @@ namespace WebAPI.Controllers
         private readonly IUserService _userService;
         private readonly SignInManager<User> _signInManager;
         private readonly IExternalAuthService _externalAuthService;
+        private readonly IEmailService _emailService;
+        private readonly UserManager<User> _userManager;
 
-        public AuthController(IUserService userServices, SignInManager<User> signInManager,   IExternalAuthService externalAuthService)
+        public AuthController(IUserService userServices, SignInManager<User> signInManager,  IExternalAuthService externalAuthService, IEmailService emailService, UserManager<User> userManager)
         {
             _userService = userServices;
             _signInManager = signInManager;
             _externalAuthService = externalAuthService;
+            _emailService = emailService;
+            _userManager = userManager;
         }
 
-        [HttpPost("register/user")]
+        // 1) Đăng ký & Gửi Welcome + Email Confirmation
+        [HttpPost("register")]
         [AllowAnonymous]
         public async Task<IActionResult> Register([FromBody] UserRegisterRequest request)
         {
-            
-            var reponse = await _userService.RegisterAsync(request);
-            return Ok(reponse);
+            var result = await _userService.RegisterAsync(request);
+            if (!result.IsSuccess)
+                return BadRequest(result);
+
+            // Gửi email chào mừng
+            await _emailService.SendWelcomeEmailAsync(request.Email);
+
+            // Tạo token email confirmation
+            var user = await _userManager.FindByEmailAsync(request.Email);
+            var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
+            var confirmLink = Url.Action(
+                nameof(ConfirmEmail), "Auth",
+                new { userId = user.Id, token },
+                Request.Scheme);
+
+            await _emailService.SendEmailAsync(
+                request.Email,
+                "Xác nhận Email",
+                $"Vui lòng nhấp vào <a href=\"{confirmLink}\">đây</a> để xác nhận tài khoản.");
+
+            return Ok(result);
         }
 
+        // 2) Xác nhận Email
+        [HttpGet("confirm-email")]
+        [AllowAnonymous]
+        public async Task<IActionResult> ConfirmEmail(Guid userId, string token)
+        {
+            var user = await _userManager.FindByIdAsync(userId.ToString());
+            if (user == null)
+                return BadRequest("Người dùng không tồn tại.");
+
+            var res = await _userManager.ConfirmEmailAsync(user, token);
+            if (!res.Succeeded)
+                return BadRequest("Xác nhận thất bại.");
+
+            return Ok("Xác nhận email thành công.");
+        }
+
+        // 3) Login
         [HttpPost("login")]
         [AllowAnonymous]
         public async Task<IActionResult> Login([FromBody] UserLoginRequest request)
-           {
-            var reponse = await _userService.LoginAsync(request);
-            return Ok(reponse);
+        {
+            var result = await _userService.LoginAsync(request);
+            return Ok(result);
         }
 
-        [HttpPatch]
-        public async Task<IActionResult> UpdateUser([FromBody] UpdateUserRequest request)
+        // 4) Forgot Password → Gửi link reset
+        [HttpPost("forgot-password")]
+        [AllowAnonymous]
+        public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequestDTO req)
         {
-            var response = await _userService.UpdateCurrentUserAsync(request);
-            if (!response.IsSuccess)
-            {
-                return BadRequest(response);
-            }
-            return Ok(response);
+            var user = await _userManager.FindByEmailAsync(req.Email);
+            if (user == null || !await _userManager.IsEmailConfirmedAsync(user))
+                return BadRequest("Email không hợp lệ hoặc chưa xác thực.");
+
+            var token = await _userManager.GeneratePasswordResetTokenAsync(user);
+            var resetLink = Url.Action(
+                nameof(ResetPassword), "Auth",
+                new { email = req.Email, token },
+                Request.Scheme);
+
+            await _emailService.SendPasswordResetEmailAsync(req.Email, resetLink);
+            return Ok("Đã gửi email đặt lại mật khẩu.");
         }
+
+        // 5) Reset Password
+        [HttpPost("reset-password")]
+        [AllowAnonymous]
+        public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequestDTO req)
+        {
+            var user = await _userManager.FindByEmailAsync(req.Email);
+            if (user == null)
+                return BadRequest("Người dùng không tồn tại.");
+
+            var res = await _userManager.ResetPasswordAsync(user, req.Token, req.NewPassword);
+            if (!res.Succeeded)
+                return BadRequest(res.Errors);
+
+            await _emailService.SendPasswordChangedEmailAsync(req.Email);
+            return Ok("Đổi mật khẩu thành công.");
+        }
+
+        // 6) Send 2FA Code qua email
+        [HttpPost("send-2fa-code")]
+        [Authorize]
+        public async Task<IActionResult> Send2FACode()
+        {
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null)
+                return Unauthorized();
+
+            // Tạo mã 2FA
+            var code = await _userManager.GenerateTwoFactorTokenAsync(user, TokenOptions.DefaultEmailProvider);
+            await _emailService.Send2FAEmailAsync(user.Email, code);
+
+            return Ok("Mã 2FA đã được gửi.");
+        }
+
+        // 7) Change Password (có sẵn)
         [HttpPost("change-password")]
         [Authorize]
         public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
         {
             var response = await _userService.ChangePasswordAsync(request);
             if (!response.IsSuccess)
-            {
                 return BadRequest(response);
-            }
+
+            // Gửi email xác nhận thay đổi mật khẩu
+            var user = await _userManager.GetUserAsync(User);
+            var email = await _userManager.GetEmailAsync(user);
+            await _emailService.SendPasswordChangedEmailAsync(email);
+
             return Ok(response);
         }
 
-        //refresh token
+        // 8) Refresh & Revoke tokens (không đổi)
         [HttpPost("refresh-token")]
         [Authorize]
-        public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenRequest request)
-        {
-            var reponse = await _userService.RefreshTokenAsync(request);
-            return Ok(reponse);
-        }
+        public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenRequest request) =>
+            Ok(await _userService.RefreshTokenAsync(request));
 
-        //revoke refresh token
         [HttpPost("revoke-refresh-token")]
         [Authorize]
         public async Task<IActionResult> RevokeRefreshToken([FromBody] RefreshTokenRequest request)
         {
             var response = await _userService.RevokeRefreshTokenAsync(request);
-            if (response.IsSuccess)
-            {
-                return Ok(response);
-            }
-
-             return BadRequest(response);
+            return response.IsSuccess ? Ok(response) : BadRequest(response);
         }
 
+        // 9) Get Current User
         [HttpGet("current-user")]
         [Authorize]
-        public async Task<IActionResult> GetCurrentUser()
-        {
-            var response = await _userService.GetCurrentUserAsync();
-            return Ok(response);
-        }
-        // 1) API gọi để lấy link Google OAuth2
+        public async Task<IActionResult> GetCurrentUser() =>
+            Ok(await _userService.GetCurrentUserAsync());
+
+        // 10) Google OAuth2 (giữ nguyên)
         [HttpGet("google-login")]
         [AllowAnonymous]
         public IActionResult GoogleLogin()
         {
-            var properties = _signInManager.ConfigureExternalAuthenticationProperties("Google", Url.Action("GoogleResponse", "Auth"));
-            return new ChallengeResult("Google", properties);
+            var props = _signInManager.ConfigureExternalAuthenticationProperties(
+                "Google", Url.Action("GoogleResponse", "Auth"));
+            return new ChallengeResult("Google", props);
         }
 
-        // 2) Google callback trả về đây
         [HttpGet("google-response")]
         [AllowAnonymous]
         public async Task<IActionResult> GoogleResponse()
         {
             var result = await _externalAuthService.ProcessGoogleLoginAsync();
-            if (!result.IsSuccess)
-                return BadRequest(result);
-
-            return Ok(result);   // bây giờ là ApiResult<UserResponse> chứa token + roles
+            return result.IsSuccess ? Ok(result) : BadRequest(result);
         }
     }
+
 }
