@@ -35,11 +35,26 @@ namespace Services.Extensions.Mapers
             UpdateAt = DateTime.UtcNow
         };
 
+        private static string FirstToken(string s) =>
+            string.IsNullOrWhiteSpace(s)
+                ? string.Empty
+                : s
+                    .Split(' ', StringSplitOptions.RemoveEmptyEntries)[0]
+                    .Trim();
+
         public static string GenerateUsername(this UserRegisterRequest req)
-            => $"{req.FirstName}{req.LastName}{Guid.NewGuid():N}".ToLower();
+        {
+            var first = FirstToken(req.FirstName);
+            var last = FirstToken(req.LastName);
+            return (first + last).ToLowerInvariant();
+        }
 
         public static string GenerateUsername(this AdminCreateUserRequest req)
-            => $"{req.FirstName}{req.LastName}{Guid.NewGuid():N}".ToLower();
+        {
+            var first = FirstToken(req.FirstName);
+            var last = FirstToken(req.LastName);
+            return (first + last).ToLowerInvariant();
+        }
 
         public static bool MergeGoogleInfo(this GoogleUserInfo info, User user)
         {
@@ -58,16 +73,10 @@ namespace Services.Extensions.Mapers
             if (req.Gender != null) user.Gender = req.Gender.ToString();
         }
 
-        public static Task<UserResponse> BuildResponseAsync(
-            this User user,
-            UserManager<User> mgr,
-            string token = null,
-            string refresh = null)
+        public static Task<UserResponse> BuildResponseAsync( this User user, UserManager<User> mgr,  string token = null, string refresh = null)
             => user.ToUserResponseAsync(mgr, token, refresh);
 
-        public static CurrentUserResponse BuildCurrentResponse(
-            this User user,
-            string token)
+        public static CurrentUserResponse BuildCurrentResponse(this User user, string token)
             => user.ToCurrentUserResponse(token);
     }
 }

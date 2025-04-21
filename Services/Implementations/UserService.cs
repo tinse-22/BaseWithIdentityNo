@@ -14,12 +14,7 @@ namespace Services.Implementations
         private readonly IUnitOfWork _unitOfWork;
         private readonly ILogger<UserService> _logger;
 
-        public UserService(
-            UserManager<User> userManager,
-            ITokenService tokenService,
-            ICurrentUserService currentUserService,
-            IUnitOfWork unitOfWork,
-            ILogger<UserService> logger)
+        public UserService(UserManager<User> userManager, ITokenService tokenService, ICurrentUserService currentUserService, IUnitOfWork unitOfWork, ILogger<UserService> logger)
         {
             _userManager = userManager;
             _tokenService = tokenService;
@@ -207,7 +202,7 @@ namespace Services.Implementations
             ChangeLockoutAsync(id, true, DateTimeOffset.MaxValue);
 
         public Task<ApiResult<UserResponse>> UnlockUserAsync(Guid id) =>
-            ChangeLockoutAsync(id, false, DateTimeOffset.UtcNow);
+            ChangeLockoutAsync(id, true, DateTimeOffset.UtcNow);
 
         private async Task<ApiResult<UserResponse>> ChangeLockoutAsync(Guid id, bool enable, DateTimeOffset until)
         {
