@@ -7,3 +7,6 @@ global using DTOs.UserDTOs.Response;
 global using UserDTOs.DTOs.Response;
 global using Repositories.Helpers;
 global using Repositories.WorkSeeds.Interfaces;
+global using Services.Commons.Gmail;
+global using Services.Extensions;
+global using Services.Extensions.Mapers;

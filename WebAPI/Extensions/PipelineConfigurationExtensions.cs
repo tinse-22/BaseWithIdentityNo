@@ -48,6 +48,7 @@ namespace WebAPI.Extensions
 
             // 2.3. Xác thực & phân quyền
             app.UseAuthentication();
+            app.UseMiddleware<SecurityStampValidationMiddleware>(); //Security Stamp
             app.UseAuthorization();
 
             // 3. Endpoint

@@ -102,6 +102,7 @@ namespace WebAPI.Extensions
             // 5. Email
             services.AddScoped<IEmailService, EmailService>();
             services.AddScoped<IEmailSender, EmailSender>();
+            services.AddScoped<IEmailQueueService, EmailQueueService>();
 
             // 6. Controllers
             services.AddControllers();

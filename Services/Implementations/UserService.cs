@@ -1,8 +1,10 @@
-﻿using Microsoft.AspNetCore.Identity;
+﻿using System.Text;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Services.Extensions;
-using Services.Extensions.Mapers;
+
 
 namespace Services.Implementations
 {
@@ -13,25 +15,34 @@ namespace Services.Implementations
         private readonly ICurrentUserService _currentUserService;
         private readonly IUnitOfWork _unitOfWork;
         private readonly ILogger<UserService> _logger;
+        private readonly IEmailQueueService _emailQueueService; // Added for queue-based email sending
+        private readonly IConfiguration _configuration;
 
-        public UserService(UserManager<User> userManager, ITokenService tokenService, ICurrentUserService currentUserService, IUnitOfWork unitOfWork, ILogger<UserService> logger)
+        public UserService(
+            UserManager<User> userManager,
+            ITokenService tokenService,
+            ICurrentUserService currentUserService,
+            IUnitOfWork unitOfWork,
+            ILogger<UserService> logger,
+            IEmailQueueService emailQueueService, 
+            IConfiguration configuration)
         {
             _userManager = userManager;
             _tokenService = tokenService;
             _currentUserService = currentUserService;
             _unitOfWork = unitOfWork;
             _logger = logger;
+            _emailQueueService = emailQueueService;
+            _configuration = configuration;
         }
 
-        public Task<ApiResult<UserResponse>> RegisterAsync(UserRegisterRequest req) =>
-            _unitOfWork.ExecuteTransactionAsync(async () =>
+        public async Task<ApiResult<UserResponse>> RegisterAsync(UserRegisterRequest req)
+        {
+            var result = await _unitOfWork.ExecuteTransactionAsync(async () =>
             {
                 if (await _userManager.ExistsByEmailAsync(req.Email))
                     return ApiResult<UserResponse>.Failure("Email đã được sử dụng");
 
-                _logger.LogInformation("Register user: {Email}", req.Email);
-
-                // --- Tạo user mới
                 var user = req.ToDomainUser();
                 user.UserName = req.GenerateUsername();
 
@@ -39,12 +50,99 @@ namespace Services.Implementations
                 if (!createRes.Succeeded)
                     return ApiResult<UserResponse>.Failure(createRes.ErrorMessage);
 
-                // Gán role mặc định
                 await _userManager.AddDefaultRoleAsync(user);
-
-                var dto = await user.BuildResponseAsync(_userManager); 
-                return ApiResult<UserResponse>.Success(dto);
+                return ApiResult<UserResponse>.Success(await user.BuildResponseAsync(_userManager));
             });
+
+            if (result.IsSuccess)
+            {
+                var user = await _userManager.FindByEmailAsync(req.Email);
+                if (user != null)
+                {
+                    // Queue emails instead of sending synchronously
+                    _ = _emailQueueService.QueueEmailAsync(req.Email, "Chào mừng", "Chào mừng bạn đến với ứng dụng!");
+                    var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
+                    var confirmLink = $"{_configuration["Frontend:ConfirmEmailUri"]}?userId={user.Id}&token={token}";
+                    _ = _emailQueueService.QueueEmailAsync(req.Email, "Xác nhận Email", $"Vui lòng nhấp vào <a href=\"{confirmLink}\">đây</a> để xác nhận tài khoản.");
+                }
+            }
+            return result;
+        }
+
+        public async Task<ApiResult<string>> ConfirmEmailAsync(Guid userId, string token)
+        {
+            var user = await _userManager.FindByIdAsync(userId.ToString());
+            if (user == null)
+                return ApiResult<string>.Failure("Người dùng không tồn tại.");
+
+            var res = await _userManager.ConfirmEmailAsync(user, token);
+            return res.Succeeded ? ApiResult<string>.Success("Xác nhận email thành công.") : ApiResult<string>.Failure("Xác nhận thất bại.");
+        }
+
+        public async Task<ApiResult<string>> ResendConfirmationEmailAsync(string email)
+        {
+            var user = await _userManager.FindByEmailAsync(email);
+            if (user == null || await _userManager.IsEmailConfirmedAsync(user))
+                return ApiResult<string>.Success("Nếu email hợp lệ và chưa được xác thực, bạn sẽ nhận email xác thực.");
+
+            var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
+            var link = $"{_configuration["Frontend:ConfirmEmailUri"]}?userId={user.Id}&token={token}";
+            _ = _emailQueueService.QueueEmailAsync(user.Email, "Xác nhận Email - Gửi lại", $"Vui lòng nhấp <a href=\"{link}\">vào đây</a> để xác nhận tài khoản.");
+            return ApiResult<string>.Success("Email xác thực đã được gửi lại.");
+        }
+
+        public async Task<ApiResult<string>> InitiatePasswordResetAsync(ForgotPasswordRequestDTO request)
+        {
+            var user = await _userManager.FindByEmailAsync(request.Email);
+            if (user == null || !await _userManager.IsEmailConfirmedAsync(user))
+                return ApiResult<string>.Success("Nếu email hợp lệ, bạn sẽ nhận được hướng dẫn đặt lại mật khẩu.");
+
+            var token = await _userManager.GeneratePasswordResetTokenAsync(user);
+            var encodedToken = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(token));
+            var resetLink = $"{_configuration["Frontend:ResetPasswordUri"]}?email={Uri.EscapeDataString(request.Email)}&token={encodedToken}";
+            _ = _emailQueueService.QueueEmailAsync(request.Email, "Đặt lại mật khẩu", $"Nhấp <a href=\"{resetLink}\">vào đây</a> để đặt lại mật khẩu.");
+            return ApiResult<string>.Success("Nếu email hợp lệ, bạn sẽ nhận được hướng dẫn đặt lại mật khẩu.");
+        }
+
+        public async Task<ApiResult<string>> ResetPasswordAsync(ResetPasswordRequestDTO request)
+        {
+            var user = await _userManager.FindByEmailAsync(request.Email);
+            if (user == null)
+                return ApiResult<string>.Failure("Yêu cầu không hợp lệ.");
+
+            string token;
+            try
+            {
+                var tokenBytes = WebEncoders.Base64UrlDecode(request.Token);
+                token = Encoding.UTF8.GetString(tokenBytes);
+            }
+            catch
+            {
+                return ApiResult<string>.Failure("Token không hợp lệ.");
+            }
+
+            var result = await _userManager.ResetPasswordAsync(user, token, request.NewPassword);
+            if (!result.Succeeded)
+                return ApiResult<string>.Failure("Đặt lại mật khẩu thất bại. Vui lòng thử lại.");
+
+            _ = _emailQueueService.QueueEmailAsync(request.Email, "Mật khẩu đã thay đổi", "Mật khẩu của bạn đã được thay đổi thành công.");
+            return ApiResult<string>.Success("Đổi mật khẩu thành công.");
+        }
+
+        public async Task<ApiResult<string>> Send2FACodeAsync()
+        {
+            var userId = _currentUserService.GetUserId();
+            if (userId == null)
+                return ApiResult<string>.Failure("Người dùng không tồn tại.");
+
+            var user = await _userManager.FindByIdAsync(userId);
+            if (user == null)
+                return ApiResult<string>.Failure("Người dùng không tồn tại.");
+
+            var code = await _userManager.GenerateTwoFactorTokenAsync(user, TokenOptions.DefaultEmailProvider);
+            _ = _emailQueueService.QueueEmailAsync(user.Email, "Mã xác thực 2FA", $"Mã của bạn là: {code}");
+            return ApiResult<string>.Success("Mã 2FA đã được gửi.");
+        }
 
         public Task<ApiResult<UserResponse>> AdminRegisterAsync(AdminCreateUserRequest req) =>
             _unitOfWork.ExecuteTransactionAsync(async () =>
@@ -74,34 +172,27 @@ namespace Services.Implementations
         {
             _logger.LogInformation("Login attempt: {Email}", req.Email);
 
-            // 1) Lấy user theo email
             var user = await _userManager.FindByEmailAsync(req.Email);
             if (user == null)
                 return ApiResult<UserResponse>.Failure("Email hoặc mật khẩu không đúng.");
 
-            // 2) Kiểm tra mật khẩu
             if (!await _userManager.CheckPasswordAsync(user, req.Password))
                 return ApiResult<UserResponse>.Failure("Email hoặc mật khẩu không đúng.");
 
-            // 3) Kiểm tra email đã xác thực
             if (!await _userManager.IsEmailConfirmedAsync(user))
                 return ApiResult<UserResponse>.Failure("Vui lòng xác nhận email trước khi đăng nhập.");
 
-            // 4) Kiểm tra lockout
             if (await _userManager.IsLockedOutAsync(user))
                 return ApiResult<UserResponse>.Failure("Tài khoản bị khóa.");
 
-            // 5) Đặt lại số lần thất bại
             await _userManager.ResetAccessFailedAsync(user);
 
-            // 6) Sinh access + refresh token
             var tokenResult = await _tokenService.GenerateToken(user);
             var accessToken = tokenResult.Data;
             var refreshToken = _tokenService.GenerateRefreshToken();
             await _userManager.SetAuthenticationTokenAsync(user,
                 loginProvider: "MyApp", tokenName: "RefreshToken", tokenValue: refreshToken);
 
-            // 7) Trả về DTO
             var dto = await user.BuildResponseAsync(_userManager, accessToken, refreshToken);
             return ApiResult<UserResponse>.Success(dto);
         }
@@ -255,21 +346,18 @@ namespace Services.Implementations
 
             if (isNew)
             {
-                // Tạo mới user và gán role ngay lập tức
                 user = info.ToDomainUser();
                 var createRes = await _userManager.CreateUserAsync(user);
                 if (!createRes.Succeeded)
-                    return null; // hoặc handle error phù hợp
+                    return null;
 
                 await _userManager.AddDefaultRoleAsync(user);
             }
             else
             {
-                // Đảm bảo user cũ cũng có role USER
                 if (!await _userManager.IsInRoleAsync(user, "USER"))
                     await _userManager.AddDefaultRoleAsync(user);
 
-                // Cập nhật thông tin từ Google nếu cần
                 var updated = info.MergeGoogleInfo(user);
                 if (updated)
                     await _userManager.UpdateAsync(user);
