@@ -1,6 +1,4 @@
 ﻿using System.Text;
-using BusinessObjects.Common;
-using DTOs.UserDTOs.Response;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.WebUtilities;
@@ -64,12 +62,36 @@ namespace WebAPI.Controllers
             if (user == null)
                 return BadRequest("Người dùng không tồn tại.");
 
-            var res = await _userManager.ConfirmEmailAsync(user, token);
+            var res = await _userManager.ConfirmEmailAsync(user, token); // Nếu token quá hạn, result.Succeeded == false và lỗi là “Invalid token” thường là 24h mặc định
+
             if (!res.Succeeded)
                 return BadRequest("Xác nhận thất bại.");
 
             return Ok("Xác nhận email thành công.");
         }
+
+        [HttpPost("resend-confirmation")]
+        [AllowAnonymous]
+        public async Task<IActionResult> ResendConfirmation([FromBody] ResendEmailRequestDTO dto)
+        {
+            var user = await _userManager.FindByEmailAsync(dto.Email);
+            if (user == null || await _userManager.IsEmailConfirmedAsync(user))
+                return Ok("Nếu email hợp lệ và chưa được xác thực, bạn sẽ nhận email xác thực.");
+
+            var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
+            var link = Url.Action(nameof(ConfirmEmail), "Auth",
+                          new { userId = user.Id, token }, Request.Scheme);
+
+            await _emailService.SendEmailAsync(user.Email,
+                "Xác nhận Email - Gửi lại",
+                $"Vui lòng nhấp <a href=\"{link}\">vào đây</a> để xác nhận tài khoản.");
+
+           
+            await _userManager.UpdateAsync(user);
+
+            return Ok("Email xác thực đã được gửi lại.");
+        }
+
 
         // 3) Login
         [HttpPost("login")]
@@ -169,7 +191,7 @@ namespace WebAPI.Controllers
             return Ok("Mã 2FA đã được gửi.");
         }
 
-        // 7) Change Password (có sẵn)
+        // 7) Change Password
         [HttpPost("change-password")]
         [Authorize]
         public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
@@ -186,7 +208,7 @@ namespace WebAPI.Controllers
             return Ok(response);
         }
 
-        // 8) Refresh & Revoke tokens (không đổi)
+        // 8) Refresh & Revoke tokens
         [HttpPost("refresh-token")]
         [Authorize]
         public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenRequest request) =>

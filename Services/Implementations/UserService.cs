@@ -31,20 +31,19 @@ namespace Services.Implementations
 
                 _logger.LogInformation("Register user: {Email}", req.Email);
 
+                // --- Tạo user mới
                 var user = req.ToDomainUser();
                 user.UserName = req.GenerateUsername();
 
-                var create = await _userManager.CreateUserAsync(user, req.Password);
-                if (!create.Succeeded)
-                    return ApiResult<UserResponse>.Failure(create.ErrorMessage);
+                var createRes = await _userManager.CreateUserAsync(user, req.Password);
+                if (!createRes.Succeeded)
+                    return ApiResult<UserResponse>.Failure(createRes.ErrorMessage);
 
+                // Gán role mặc định
                 await _userManager.AddDefaultRoleAsync(user);
-                var token = await _tokenService.GenerateToken(user);
-                var refresh = _tokenService.GenerateRefreshToken();
-                await _userManager.SetRefreshTokenAsync(user, refresh);
 
-                return ApiResult<UserResponse>.Success(
-                    await user.BuildResponseAsync(_userManager, token.Data, refresh));
+                var dto = await user.BuildResponseAsync(_userManager); 
+                return ApiResult<UserResponse>.Success(dto);
             });
 
         public Task<ApiResult<UserResponse>> AdminRegisterAsync(AdminCreateUserRequest req) =>
@@ -74,23 +73,37 @@ namespace Services.Implementations
         public async Task<ApiResult<UserResponse>> LoginAsync(UserLoginRequest req)
         {
             _logger.LogInformation("Login attempt: {Email}", req.Email);
-            // Validate credentials
-            var (isValid, user) = await _userManager.ValidateCredentialsAsync(req.Email, req.Password);
-            if (!isValid)
-                return ApiResult<UserResponse>.Failure("Invalid user or password");
 
-            // Check lockout
-            if (await _userManager.IsUserLockedOutAsync(user))
-                return ApiResult<UserResponse>.Failure("Account is locked");
+            // 1) Lấy user theo email
+            var user = await _userManager.FindByEmailAsync(req.Email);
+            if (user == null)
+                return ApiResult<UserResponse>.Failure("Email hoặc mật khẩu không đúng.");
 
-            // Reset failed count and generate token
+            // 2) Kiểm tra mật khẩu
+            if (!await _userManager.CheckPasswordAsync(user, req.Password))
+                return ApiResult<UserResponse>.Failure("Email hoặc mật khẩu không đúng.");
+
+            // 3) Kiểm tra email đã xác thực
+            if (!await _userManager.IsEmailConfirmedAsync(user))
+                return ApiResult<UserResponse>.Failure("Vui lòng xác nhận email trước khi đăng nhập.");
+
+            // 4) Kiểm tra lockout
+            if (await _userManager.IsLockedOutAsync(user))
+                return ApiResult<UserResponse>.Failure("Tài khoản bị khóa.");
+
+            // 5) Đặt lại số lần thất bại
             await _userManager.ResetAccessFailedAsync(user);
-            var token = await _tokenService.GenerateToken(user);
-            var refresh = _tokenService.GenerateRefreshToken();
-            await _userManager.SetRefreshTokenAsync(user, refresh);
 
-            return ApiResult<UserResponse>.Success(
-                await user.BuildResponseAsync(_userManager, token.Data, refresh));
+            // 6) Sinh access + refresh token
+            var tokenResult = await _tokenService.GenerateToken(user);
+            var accessToken = tokenResult.Data;
+            var refreshToken = _tokenService.GenerateRefreshToken();
+            await _userManager.SetAuthenticationTokenAsync(user,
+                loginProvider: "MyApp", tokenName: "RefreshToken", tokenValue: refreshToken);
+
+            // 7) Trả về DTO
+            var dto = await user.BuildResponseAsync(_userManager, accessToken, refreshToken);
+            return ApiResult<UserResponse>.Success(dto);
         }
 
         public async Task<ApiResult<UserResponse>> GetByIdAsync(Guid id)
