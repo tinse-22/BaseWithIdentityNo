@@ -1,6 +1,9 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿using System.Text;
+using BusinessObjects.Common;
+using DTOs.UserDTOs.Response;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Services.Commons.Gmail;   // IEmailService
+using Microsoft.AspNetCore.WebUtilities;
 namespace WebAPI.Controllers
 {
     [Route("api/[controller]")]
@@ -12,14 +15,16 @@ namespace WebAPI.Controllers
         private readonly IExternalAuthService _externalAuthService;
         private readonly IEmailService _emailService;
         private readonly UserManager<User> _userManager;
+        private readonly IConfiguration _configuration;
 
-        public AuthController(IUserService userServices, SignInManager<User> signInManager,  IExternalAuthService externalAuthService, IEmailService emailService, UserManager<User> userManager)
+        public AuthController(IUserService userServices, SignInManager<User> signInManager,  IExternalAuthService externalAuthService, IEmailService emailService, UserManager<User> userManager, IConfiguration configuration)
         {
             _userService = userServices;
             _signInManager = signInManager;
             _externalAuthService = externalAuthService;
             _emailService = emailService;
             _userManager = userManager;
+            _configuration = configuration;
         }
 
         // 1) Đăng ký & Gửi Welcome + Email Confirmation
@@ -75,39 +80,76 @@ namespace WebAPI.Controllers
             return Ok(result);
         }
 
-        // 4) Forgot Password → Gửi link reset
+        /// <summary>
+        /// Gửi email đặt lại mật khẩu. 
+        /// Frontend URL được cấu hình trong appsettings.json (key: Frontend:ResetPasswordUri)
+        /// </summary>
         [HttpPost("forgot-password")]
         [AllowAnonymous]
         public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequestDTO req)
         {
+            if (!ModelState.IsValid)
+                return BadRequest("Dữ liệu không hợp lệ.");
+
             var user = await _userManager.FindByEmailAsync(req.Email);
             if (user == null || !await _userManager.IsEmailConfirmedAsync(user))
-                return BadRequest("Email không hợp lệ hoặc chưa xác thực.");
+                // Không tiết lộ chi tiết: luôn trả về Ok để tránh dò email
+                return Ok("Nếu email hợp lệ, bạn sẽ nhận được hướng dẫn đặt lại mật khẩu.");
 
+            // 1) Tạo token và mã hóa bằng Base64 URL
             var token = await _userManager.GeneratePasswordResetTokenAsync(user);
-            var resetLink = Url.Action(
-                nameof(ResetPassword), "Auth",
-                new { email = req.Email, token },
-                Request.Scheme);
+            var tokenBytes = Encoding.UTF8.GetBytes(token);
+            var encodedToken = WebEncoders.Base64UrlEncode(tokenBytes);
 
+            // 2) Lấy URL frontend từ cấu hình
+            var resetPasswordUri = _configuration["Frontend:ResetPasswordUri"];
+            // Ví dụ: https://yourfrontend.com/reset-password
+            var resetLink = $"{resetPasswordUri}?email={Uri.EscapeDataString(req.Email)}&token={encodedToken}";
+
+            // 3) Gửi email
             await _emailService.SendPasswordResetEmailAsync(req.Email, resetLink);
-            return Ok("Đã gửi email đặt lại mật khẩu.");
+
+            return Ok("Nếu email hợp lệ, bạn sẽ nhận được hướng dẫn đặt lại mật khẩu.");
         }
 
-        // 5) Reset Password
+        /// <summary>
+        /// Xử lý đặt lại mật khẩu. 
+        /// Nhận payload từ frontend gồm email, token đã mã hóa và mật khẩu mới.
+        /// </summary>
         [HttpPost("reset-password")]
         [AllowAnonymous]
         public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequestDTO req)
         {
+            if (!ModelState.IsValid)
+                return BadRequest("Dữ liệu không hợp lệ.");
+
             var user = await _userManager.FindByEmailAsync(req.Email);
             if (user == null)
-                return BadRequest("Người dùng không tồn tại.");
+                return BadRequest("Yêu cầu không hợp lệ.");
 
-            var res = await _userManager.ResetPasswordAsync(user, req.Token, req.NewPassword);
-            if (!res.Succeeded)
-                return BadRequest(res.Errors);
+            // Giải mã token
+            string decodedToken;
+            try
+            {
+                var tokenBytes = WebEncoders.Base64UrlDecode(req.Token);
+                decodedToken = Encoding.UTF8.GetString(tokenBytes);
+            }
+            catch
+            {
+                return BadRequest("Token không hợp lệ.");
+            }
 
+            // Đặt lại mật khẩu
+            var result = await _userManager.ResetPasswordAsync(user, decodedToken, req.NewPassword);
+            if (!result.Succeeded)
+            {
+                // Có thể log chi tiết result.Errors ở server
+                return BadRequest("Đặt lại mật khẩu thất bại. Vui lòng thử lại.");
+            }
+
+            // Gửi email xác nhận mật khẩu đã thay đổi
             await _emailService.SendPasswordChangedEmailAsync(req.Email);
+
             return Ok("Đổi mật khẩu thành công.");
         }
 
@@ -164,22 +206,37 @@ namespace WebAPI.Controllers
         public async Task<IActionResult> GetCurrentUser() =>
             Ok(await _userService.GetCurrentUserAsync());
 
-        // 10) Google OAuth2 (giữ nguyên)
+        /// <summary>
+        /// Bước 1: Redirect tới Google để lấy authorization code
+        /// </summary>
         [HttpGet("google-login")]
         [AllowAnonymous]
         public IActionResult GoogleLogin()
         {
-            var props = _signInManager.ConfigureExternalAuthenticationProperties(
-                "Google", Url.Action("GoogleResponse", "Auth"));
-            return new ChallengeResult("Google", props);
+            var redirectUrl = Url.Action(nameof(GoogleResponse), "Auth");
+            var props = _signInManager.ConfigureExternalAuthenticationProperties("Google", redirectUrl);
+            return Challenge(props, "Google");
         }
 
+        /// <summary>
+        /// Bước 2: Google callback về -- thực hiện tạo/cập nhật user, bật EmailConfirmed, sinh JWT
+        /// </summary>
         [HttpGet("google-response")]
         [AllowAnonymous]
         public async Task<IActionResult> GoogleResponse()
         {
+            // Lấy thông tin từ Google
+            var info = await _signInManager.GetExternalLoginInfoAsync();
+            if (info == null)
+                return BadRequest(ApiResult<UserResponse>.Failure("Không lấy được thông tin Google login."));
+
+            // Dùng service để xử lý toàn bộ flow
             var result = await _externalAuthService.ProcessGoogleLoginAsync();
-            return result.IsSuccess ? Ok(result) : BadRequest(result);
+            if (!result.IsSuccess)
+                return BadRequest(result);
+
+            // Trả về user + accessToken + refreshToken
+            return Ok(result);
         }
     }
 

@@ -1,8 +1,4 @@
-﻿using Microsoft.AspNetCore.Builder;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.EntityFrameworkCore;
 
 namespace WebAPI.Extensions
 {
@@ -10,7 +6,7 @@ namespace WebAPI.Extensions
     {
         public static IApplicationBuilder UseApplicationPipeline(this IApplicationBuilder app)
         {
-            // 1. Chuẩn bị một scope để resolve các scoped service
+            // 1. Chuẩn bị scope để migrate DB & Swagger
             var scopeFactory = app.ApplicationServices.GetRequiredService<IServiceScopeFactory>();
             using (var scope = scopeFactory.CreateScope())
             {
@@ -28,7 +24,6 @@ namespace WebAPI.Extensions
                     logger.LogError(ex, "Error when migrating/seeding DB.");
                 }
 
-                // Chỉ bật swagger trong dev
                 if (env.IsDevelopment())
                 {
                     app.UseSwagger();
@@ -36,12 +31,26 @@ namespace WebAPI.Extensions
                 }
             }
 
-            // 2. Các middleware chung (outside the scope)
+            // 2. Middleware chung
             app.UseHttpsRedirection();
             app.UseRouting();
+
+            // 2.1. Kích hoạt CORS
             app.UseCors("CorsPolicy");
+
+            // 2.2. Thêm header để cho phép popup OAuth Google postMessage về trang chủ
+            app.Use(async (context, next) =>
+            {
+                // Phải đúng tên; có thể thay đổi hoa-thường, có 3 giá trị nằm trong ba token chuẩn.
+                context.Response.Headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups";
+                await next();
+            });
+
+            // 2.3. Xác thực & phân quyền
             app.UseAuthentication();
             app.UseAuthorization();
+
+            // 3. Endpoint
             app.UseEndpoints(endpoints => endpoints.MapControllers());
 
             return app;
