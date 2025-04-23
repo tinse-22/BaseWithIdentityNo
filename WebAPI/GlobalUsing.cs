@@ -12,3 +12,5 @@ global using Services.Interfaces;
 global using Services.Commons.Gmail;
 global using Services.Implementations;
 global using System.Security.Claims;
+global using BusinessObjects.Common;
+global using DTOs.UserDTOs.Response;
