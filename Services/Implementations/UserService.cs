@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using System.Net;
+using System.Text;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Configuration;
@@ -76,14 +77,28 @@ namespace Services.Implementations
             var user = await _userManager.FindByEmailAsync(email);
             if (user == null) return;
 
-            var welcomeTask = _emailQueueService.QueueEmailAsync(email, "Chào mừng", "Chào mừng bạn đến với ứng dụng!");
+            // Queue email chào mừng
+            var welcomeTask = _emailQueueService.QueueEmailAsync(
+                email,
+                "Chào mừng",
+                "Chào mừng bạn đến với ứng dụng!"
+            );
+
+            // Sinh token và encode
             var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
-            var confirmLink = $"{_confirmEmailUri}?userId={user.Id}&token={token}";
-            var confirmationTask = _emailQueueService.QueueEmailAsync(email, "Xác nhận Email",
-                $"Vui lòng nhấp vào <a href=\"{confirmLink}\">đây</a> để xác nhận tài khoản.");
+            var encodedToken = WebUtility.UrlEncode(token);  // ✅ Đã encode đúng :contentReference[oaicite:5]{index=5}
+            var confirmLink = $"{_confirmEmailUri}?userId={user.Id}&token={encodedToken}";
+
+            // Queue email xác nhận
+            var confirmationTask = _emailQueueService.QueueEmailAsync(
+                email,
+                "Xác nhận Email",
+                $"Vui lòng nhấp vào <a href=\"{confirmLink}\">đây</a> để xác nhận tài khoản."
+            );
 
             await Task.WhenAll(welcomeTask, confirmationTask);
         }
+
 
         public async Task<ApiResult<string>> ConfirmEmailAsync(Guid userId, string token)
         {
