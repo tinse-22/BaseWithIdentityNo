@@ -1,7 +1,6 @@
 ﻿using Microsoft.AspNetCore.Identity;
-using Services.Helpers;
 
-namespace Services.Extensions
+namespace Services.Helpers
 {
     public static class UserManagerExtensions
     {
@@ -12,6 +11,10 @@ namespace Services.Extensions
         public static async Task<IdentityResultWrapper> CreateUserAsync(
             this UserManager<User> mgr, User user, string password = null)
         {
+            // Đảm bảo UserName được đặt bằng email trước khi tạo người dùng
+            if (string.IsNullOrEmpty(user.UserName))
+                user.UserName = user.Email;
+
             var res = password != null
                 ? await mgr.CreateAsync(user, password)
                 : await mgr.CreateAsync(user);
@@ -30,26 +33,13 @@ namespace Services.Extensions
             this UserManager<User> mgr, User user, string token)
             => mgr.SetAuthenticationTokenAsync(user, "MyApp", "RefreshToken", token);
 
-        public static async Task<(bool IsValid, User User)> ValidateCredentialsAsync(
-            this UserManager<User> mgr, string email, string password)
-        {
-            var user = await mgr.FindByEmailAsync(email);
-            if (user == null) return (false, null);
-            var ok = await mgr.CheckPasswordAsync(user, password);
-            return (ok, ok ? user : null);
-        }
-
-        public static Task<bool> IsUserLockedOutAsync(
-            this UserManager<User> mgr, User user)
-            => mgr.IsLockedOutAsync(user);
+        public static async Task<bool> ValidateRefreshTokenAsync(
+            this UserManager<User> mgr, User user, string token)
+            => await mgr.GetAuthenticationTokenAsync(user, "MyApp", "RefreshToken") == token;
 
         public static Task ResetAccessFailedAsync(
             this UserManager<User> mgr, User user)
             => mgr.ResetAccessFailedCountAsync(user);
-
-        public static async Task<bool> ValidateRefreshTokenAsync(
-            this UserManager<User> mgr, User user, string token)
-            => await mgr.GetAuthenticationTokenAsync(user, "MyApp", "RefreshToken") == token;
 
         public static async Task<IdentityResultWrapper> RemoveRefreshTokenAsync(
             this UserManager<User> mgr, User user)

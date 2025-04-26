@@ -12,47 +12,84 @@ namespace Repositories
             _context = context;
         }
 
-        /// <summary>
-        /// Retrieves a paginated list of users along with their assigned roles.
-        /// </summary>
         public async Task<PagedList<UserDetailsDTO>> GetUserDetailsAsync(int pageNumber, int pageSize)
         {
-            // Use AsNoTracking() to improve read performance by avoiding unnecessary change tracking
-            var query = _context.Users
-                .AsNoTracking()
+            // Query optimization: Count and retrieve users in a single database round trip
+            var query = _context.Users.AsNoTracking();
+
+            var totalCount = await query.CountAsync();
+
+            // Prepare efficient query for paged results
+            var pagedUsers = await query
                 .OrderByDescending(u => u.CreateAt)
+                .Skip((pageNumber - 1) * pageSize)
+                .Take(pageSize)
                 .Select(u => new
                 {
                     User = u,
-                    RoleNames = (from ur in _context.Set<IdentityUserRole<Guid>>().AsNoTracking()
-                                 join r in _context.Roles.AsNoTracking() on ur.RoleId equals r.Id
-                                 where ur.UserId == u.Id
-                                 select r.Name).ToList()
-                });
-
-            // Count the total number of users
-            var count = await query.CountAsync();
-
-            // Paginate the data
-            var data = await query
-                .Skip((pageNumber - 1) * pageSize)
-                .Take(pageSize)
+                    Id = u.Id
+                })
                 .ToListAsync();
 
-            // Map the result to UserDetailsDTO
-            var dtos = data.Select(x => new UserDetailsDTO
+            var userIds = pagedUsers.Select(x => x.Id).ToList();
+
+            // Fetch all roles for these users in a single query with projection
+            var userRolesDict = await _context.Set<IdentityUserRole<Guid>>()
+                .AsNoTracking()
+                .Where(ur => userIds.Contains(ur.UserId))
+                .Join(
+                    _context.Roles.AsNoTracking(),
+                    ur => ur.RoleId,
+                    r => r.Id,
+                    (ur, r) => new { UserId = ur.UserId, RoleName = r.Name }
+                )
+                .GroupBy(x => x.UserId)
+                .ToDictionaryAsync(
+                    g => g.Key,
+                    g => g.Select(x => x.RoleName).ToList()
+                );
+
+            // Map to DTOs with optimized lookups
+            var userDetailsList = pagedUsers.Select(u => new UserDetailsDTO
             {
-                Id = x.User.Id,
-                FirstName = x.User.FirstName ?? string.Empty,
-                LastName = x.User.LastName ?? string.Empty,
-                Email = x.User.Email ?? string.Empty,
-                Gender = x.User.Gender,
-                CreateAt = x.User.CreateAt,
-                UpdateAt = x.User.UpdateAt,
-                Roles = x.RoleNames
+                Id = u.User.Id,
+                FirstName = u.User.FirstName ?? string.Empty,
+                LastName = u.User.LastName ?? string.Empty,
+                Email = u.User.Email ?? string.Empty,
+                Gender = u.User.Gender,
+                CreateAt = u.User.CreateAt,
+                UpdateAt = u.User.UpdateAt,
+                Roles = userRolesDict.TryGetValue(u.User.Id, out var roles) ? roles : new List<string>()
             }).ToList();
 
-            return new PagedList<UserDetailsDTO>(dtos, count, pageNumber, pageSize);
+            return new PagedList<UserDetailsDTO>(userDetailsList, totalCount, pageNumber, pageSize);
+        }
+
+        public async Task<bool> ExistsByEmailAsync(string email)
+        {
+            if (string.IsNullOrWhiteSpace(email))
+                return false;
+
+            return await _context.Users
+                .AsNoTracking()
+                .AnyAsync(u => u.Email == email);
+        }
+
+        public async Task<User> GetUserDetailsByIdAsync(Guid id)
+        {
+            return await _context.Users
+                .AsNoTracking()
+                .FirstOrDefaultAsync(u => u.Id == id);
+        }
+
+        public async Task<bool> ExistsByUsernameAsync(string username)
+        {
+            if (string.IsNullOrWhiteSpace(username))
+                return false;
+
+            return await _context.Users
+                .AsNoTracking()
+                .AnyAsync(u => u.UserName == username);
         }
     }
 }

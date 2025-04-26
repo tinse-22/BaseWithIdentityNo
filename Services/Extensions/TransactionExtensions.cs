@@ -1,4 +1,4 @@
-﻿namespace Services.Extensions
+﻿namespace Services.Helpers
 {
     public static class TransactionExtensions
     {
