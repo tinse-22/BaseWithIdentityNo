@@ -9,18 +9,12 @@ namespace WebAPI.Controllers
     {
         private readonly IUserService _userService;
         private readonly IExternalAuthService _externalAuthService;
-        private readonly IConfiguration _configuration;
         private readonly SignInManager<User> _signInManager;
 
-        public AuthController(
-            IUserService userService,
-            IExternalAuthService externalAuthService,
-            IConfiguration configuration,
-            SignInManager<User> signInManager)
+        public AuthController(IUserService userService, IExternalAuthService externalAuthService,  SignInManager<User> signInManager)
         {
             _userService = userService;
             _externalAuthService = externalAuthService;
-            _configuration = configuration;
             _signInManager = signInManager;
         }
 

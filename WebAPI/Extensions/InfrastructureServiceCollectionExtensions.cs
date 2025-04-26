@@ -42,7 +42,7 @@ namespace WebAPI.Extensions
                 opts.Password.RequireDigit = false;
                 opts.Password.RequireLowercase = false;
                 opts.Password.RequireUppercase = false;
-                opts.Password.RequiredLength = 8;
+                opts.Password.RequiredLength = 4;
             })
             .AddEntityFrameworkStores<BaseIdentityDbContext>()
             .AddDefaultTokenProviders();
@@ -99,10 +99,10 @@ namespace WebAPI.Extensions
             services.AddScoped<ITokenService, TokenService>();
             services.AddScoped<IUserService, UserService>();
 
-            // 5. Email
-            services.AddScoped<IEmailService, EmailService>();
-            services.AddScoped<IEmailSender, EmailSender>();
-            services.AddScoped<IEmailQueueService, EmailQueueService>();
+            // 5. Email + Quartz
+            services.AddEmailServices(opts =>
+                configuration.GetSection("EmailSettings").Bind(opts)
+            );
 
             // 6. Controllers
             services.AddControllers();

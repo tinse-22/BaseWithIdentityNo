@@ -1,8 +1,7 @@
 ﻿using System.Security.Claims;
-using Microsoft.AspNetCore.Http;     // cho CookieOptions
+using Microsoft.AspNetCore.Http;     
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Options;
-using Services.Extensions.Mapers;
 
 public class ExternalAuthService : IExternalAuthService
 {
