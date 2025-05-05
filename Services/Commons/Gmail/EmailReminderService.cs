@@ -3,7 +3,6 @@ using Quartz;
 
 namespace Services.Commons.Gmail
 {
-    // Scheduled job service for sending emails on schedule
     public class EmailReminderService : IHostedService
     {
         private readonly ISchedulerFactory _schedulerFactory;
@@ -26,12 +25,10 @@ namespace Services.Commons.Gmail
             var trigger = TriggerBuilder.Create()
                 .WithIdentity("sendEmailTrigger", "emailGroup")
                 .StartNow()
-                .WithSchedule(CronScheduleBuilder.DailyAtHourAndMinute(10, 00))  // Gửi email vào 10:00 sáng mỗi ngày
+                .WithSchedule(CronScheduleBuilder.DailyAtHourAndMinute(10, 00))
                 .Build();
 
             await _scheduler.ScheduleJob(job, trigger, cancellationToken);
-
-            // Có thể thêm nhiều trigger khác với các lịch khác nhau
         }
 
         public async Task StopAsync(CancellationToken cancellationToken)

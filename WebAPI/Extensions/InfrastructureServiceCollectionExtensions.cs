@@ -22,7 +22,7 @@ namespace WebAPI.Extensions
             services.AddCors(opt =>
             {
                 opt.AddPolicy("CorsPolicy", b => b
-                    .AllowAnyOrigin()
+                    .WithOrigins("http://localhost:5173")
                     .AllowAnyMethod()
                     .AllowAnyHeader());
             });
@@ -98,7 +98,7 @@ namespace WebAPI.Extensions
             services.AddScoped<IExternalAuthService, ExternalAuthService>();
             services.AddScoped<ITokenService, TokenService>();
             services.AddScoped<IUserService, UserService>();
-
+            services.AddScoped<IUserEmailService, UserEmailService>();
             // 5. Email + Quartz
             services.AddEmailServices(opts =>
                 configuration.GetSection("EmailSettings").Bind(opts)

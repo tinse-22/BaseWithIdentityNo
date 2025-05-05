@@ -1,7 +1,9 @@
 ﻿using System.Security.Claims;
+using Google.Apis.Auth;
 using Microsoft.AspNetCore.Http;     
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Configuration;
 
 public class ExternalAuthService : IExternalAuthService
 {
@@ -11,6 +13,7 @@ public class ExternalAuthService : IExternalAuthService
     private readonly ITokenService _tokenService;
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly JwtSettings _jwtSettings;
+    private readonly IConfiguration _configuration;
 
     public ExternalAuthService(
         SignInManager<User> signInManager,
@@ -18,7 +21,8 @@ public class ExternalAuthService : IExternalAuthService
         UserManager<User> userManager,
         ITokenService tokenService,
         IHttpContextAccessor httpContextAccessor,
-        IOptions<JwtSettings> jwtOptions)
+        IOptions<JwtSettings> jwtOptions,
+        IConfiguration configuration)
     {
         _signInManager = signInManager;
         _userService = userService;
@@ -26,6 +30,64 @@ public class ExternalAuthService : IExternalAuthService
         _tokenService = tokenService;
         _httpContextAccessor = httpContextAccessor;
         _jwtSettings = jwtOptions.Value;
+        _configuration = configuration;
+    }
+    public async Task<ApiResult<UserResponse>> ProcessGoogleTokenAsync(string tokenId)
+    {
+        try
+        {
+            // Validate Google token with correct settings
+            var validationSettings = new GoogleJsonWebSignature.ValidationSettings
+            {
+                Audience = new[] { _configuration["Authentication:Google:ClientId"] }
+            };
+
+            var payload = await GoogleJsonWebSignature.ValidateAsync(tokenId, validationSettings);
+
+            // Continue with user creation/login after successful validation
+            var googleInfo = new GoogleUserInfo
+            {
+                Email = payload.Email,
+                FirstName = payload.GivenName,
+                LastName = payload.FamilyName
+            };
+
+            // Example logic for creating or updating the user
+            var userResp = await _userService.CreateOrUpdateGoogleUserAsync(googleInfo);
+            if (userResp == null)
+                return ApiResult<UserResponse>.Failure("Cannot create or update Google user");
+
+            var user = await _userManager.FindByEmailAsync(payload.Email);
+            if (user == null)
+                return ApiResult<UserResponse>.Failure("User not found after creation");
+
+            // Generate tokens
+            var tokenResult = await _tokenService.GenerateToken(user);
+            if (!tokenResult.IsSuccess)
+                return ApiResult<UserResponse>.Failure("Cannot generate token");
+
+            var accessToken = tokenResult.Data;
+            var refreshToken = _tokenService.GenerateRefreshToken();
+
+            // Set HttpOnly cookie for refresh token
+            var cookieOpts = new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = true,
+                SameSite = SameSiteMode.Strict,
+                Expires = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenDays)
+            };
+            _httpContextAccessor.HttpContext!
+                .Response.Cookies.Append("refreshToken", refreshToken, cookieOpts);
+
+            // Return user response with access token
+            var dto = await user.ToUserResponseAsync(_userManager, accessToken);
+            return ApiResult<UserResponse>.Success(dto);
+        }
+        catch (Exception ex)
+        {
+            return ApiResult<UserResponse>.Failure($"Google authentication failed: {ex.Message}");
+        }
     }
 
     public async Task<ApiResult<UserResponse>> ProcessGoogleLoginAsync()
@@ -123,5 +185,7 @@ public class ExternalAuthService : IExternalAuthService
         var existingDto = await existingUser.ToUserResponseAsync(
                               _userManager, existingAccess);
         return ApiResult<UserResponse>.Success(existingDto);
+
     }
+
 }

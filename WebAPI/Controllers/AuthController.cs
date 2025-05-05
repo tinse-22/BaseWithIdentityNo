@@ -30,8 +30,15 @@ namespace WebAPI.Controllers
         [AllowAnonymous]
         public async Task<IActionResult> ConfirmEmail(Guid userId, string token)
         {
+            if (userId == Guid.Empty || string.IsNullOrWhiteSpace(token))
+                return BadRequest("Invalid parameters");
+
             var result = await _userService.ConfirmEmailAsync(userId, token);
-            return result.IsSuccess ? Ok(result.Message) : BadRequest(result.Message);
+
+            if (result.IsSuccess)
+                return Ok(new { success = true, message = result.Message });
+            else
+                return BadRequest(new { success = false, message = result.Message });
         }
 
         [HttpPost("resend-confirmation")]
@@ -124,6 +131,16 @@ namespace WebAPI.Controllers
         public async Task<IActionResult> GoogleResponse()
         {
             var result = await _externalAuthService.ProcessGoogleLoginAsync();
+            return result.IsSuccess ? Ok(result) : BadRequest(result);
+        }
+        [HttpPost("google-login-token")]
+        [AllowAnonymous]
+        public async Task<IActionResult> GoogleLoginToken([FromBody] GoogleLoginRequest request)
+        {
+            if (string.IsNullOrEmpty(request.TokenId))
+                return BadRequest("Token ID is required");
+
+            var result = await _externalAuthService.ProcessGoogleTokenAsync(request.TokenId);
             return result.IsSuccess ? Ok(result) : BadRequest(result);
         }
     }

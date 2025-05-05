@@ -1,10 +1,10 @@
-﻿using System.Net;
-using System.Text;
+﻿using System.Text;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Repositories.Interfaces;
+using Services.Interfaces.Services.Commons.User;
 
 namespace Services.Implementations
 {
@@ -15,7 +15,7 @@ namespace Services.Implementations
         private readonly ICurrentUserService _currentUserService;
         private readonly IUnitOfWork _unitOfWork;
         private readonly ILogger<UserService> _logger;
-        private readonly IEmailQueueService _emailQueueService;
+        private readonly IUserEmailService _userEmailService;
         private readonly string _confirmEmailUri;
         private readonly string _resetPasswordUri;
         private readonly IUserRepository _userRepository;
@@ -26,30 +26,32 @@ namespace Services.Implementations
             ICurrentUserService currentUserService,
             IUnitOfWork unitOfWork,
             ILogger<UserService> logger,
-            IEmailQueueService emailQueueService,
+            IUserEmailService userEmailService,
             IConfiguration configuration,
             IUserRepository userRepository)
         {
-            _userManager = userManager;
-            _tokenService = tokenService;
-            _currentUserService = currentUserService;
-            _unitOfWork = unitOfWork;
-            _logger = logger;
-            _emailQueueService = emailQueueService;
-            _confirmEmailUri = configuration["Frontend:ConfirmEmailUri"];
-            _resetPasswordUri = configuration["Frontend:ResetPasswordUri"];
-            _userRepository = userRepository;
+            _userManager = userManager ?? throw new ArgumentNullException(nameof(userManager));
+            _tokenService = tokenService ?? throw new ArgumentNullException(nameof(tokenService));
+            _currentUserService = currentUserService ?? throw new ArgumentNullException(nameof(currentUserService));
+            _unitOfWork = unitOfWork ?? throw new ArgumentNullException(nameof(unitOfWork));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _userEmailService = userEmailService ?? throw new ArgumentNullException(nameof(userEmailService));
+            _confirmEmailUri = configuration["Frontend:ConfirmEmailUri"] ?? throw new ArgumentNullException(nameof(configuration), "ConfirmEmailUri is missing");
+            _resetPasswordUri = configuration["Frontend:ResetPasswordUri"] ?? throw new ArgumentNullException(nameof(configuration), "ResetPasswordUri is missing");
+            _userRepository = userRepository ?? throw new ArgumentNullException(nameof(userRepository));
         }
 
         public async Task<ApiResult<UserResponse>> RegisterAsync(UserRegisterRequest req)
         {
+            if (req == null || string.IsNullOrWhiteSpace(req.Email))
+                return ApiResult<UserResponse>.Failure("Invalid request");
+
             if (await _userRepository.ExistsByEmailAsync(req.Email))
-                return ApiResult<UserResponse>.Failure("Email đã được sử dụng");
+                return ApiResult<UserResponse>.Failure("Email already in use");
 
             var result = await _unitOfWork.ExecuteTransactionAsync(async () =>
             {
                 var user = UserMappings.ToDomainUser(req);
-
                 var createRes = await _userManager.CreateUserAsync(user, req.Password);
                 if (!createRes.Succeeded)
                     return ApiResult<UserResponse>.Failure(createRes.ErrorMessage);
@@ -66,7 +68,7 @@ namespace Services.Implementations
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Không thể gửi email chào mừng cho {Email}", req.Email);
+                    _logger.LogError(ex, "Failed to send welcome emails for {Email}", req.Email);
                 }
             }
             return result;
@@ -77,79 +79,90 @@ namespace Services.Implementations
             var user = await _userManager.FindByEmailAsync(email);
             if (user == null) return;
 
-            // Queue email chào mừng
-            var welcomeTask = _emailQueueService.QueueEmailAsync(
-                email,
-                "Chào mừng",
-                "Chào mừng bạn đến với ứng dụng!"
-            );
-
-            // Sinh token và encode
             var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
-            var encodedToken = WebUtility.UrlEncode(token);  // ✅ Đã encode đúng :contentReference[oaicite:5]{index=5}
-            var confirmLink = $"{_confirmEmailUri}?userId={user.Id}&token={encodedToken}";
 
-            // Queue email xác nhận
-            var confirmationTask = _emailQueueService.QueueEmailAsync(
-                email,
-                "Xác nhận Email",
-                $"Vui lòng nhấp vào <a href=\"{confirmLink}\">đây</a> để xác nhận tài khoản."
+            // Không cần encode token ở đây, để UserEmailService xử lý
+            await Task.WhenAll(
+                _userEmailService.SendWelcomeEmailAsync(email),
+                _userEmailService.SendEmailConfirmationAsync(email, user.Id, token, _confirmEmailUri)
             );
-
-            await Task.WhenAll(welcomeTask, confirmationTask);
         }
 
-
-        public async Task<ApiResult<string>> ConfirmEmailAsync(Guid userId, string token)
+        public async Task<ApiResult<string>> ConfirmEmailAsync(Guid userId, string encodedToken)
         {
+            if (string.IsNullOrWhiteSpace(encodedToken))
+                return ApiResult<string>.Failure("Invalid token");
+
             var user = await _userManager.FindByIdAsync(userId.ToString());
             if (user == null)
-                return ApiResult<string>.Failure("Người dùng không tồn tại.");
+                return ApiResult<string>.Failure("User not found");
+
+            string token;
+            try
+            {
+                token = Encoding.UTF8.GetString(WebEncoders.Base64UrlDecode(encodedToken));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to decode token for user {UserId}", userId);
+                return ApiResult<string>.Failure("Invalid token format");
+            }
 
             var res = await _userManager.ConfirmEmailAsync(user, token);
-            return res.Succeeded
-                ? ApiResult<string>.Success("Xác nhận email thành công.")
-                : ApiResult<string>.Failure("Xác nhận thất bại.");
+            if (!res.Succeeded)
+            {
+                _logger.LogWarning("Email confirmation failed for user {UserId}. Errors: {Errors}",
+                    userId, string.Join(", ", res.Errors.Select(e => e.Description)));
+                return ApiResult<string>.Failure("Email confirmation failed: " + string.Join(", ", res.Errors.Select(e => e.Description)));
+            }
+
+            return ApiResult<string>.Success("Email confirmed successfully");
         }
 
         public async Task<ApiResult<string>> ResendConfirmationEmailAsync(string email)
         {
+            if (string.IsNullOrWhiteSpace(email))
+                return ApiResult<string>.Failure("Invalid email");
+
             var user = await _userManager.FindByEmailAsync(email);
-            if (user == null || await _userManager.IsEmailConfirmedAsync(user))
-                return ApiResult<string>.Success("Nếu email hợp lệ và chưa được xác thực, bạn sẽ nhận email xác thực.");
+            if (user == null)
+                return ApiResult<string>.Success("If the email is valid and unconfirmed, a confirmation email will be sent");
+
+            if (await _userManager.IsEmailConfirmedAsync(user))
+                return ApiResult<string>.Success("Email is already confirmed");
 
             var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
-            var link = $"{_confirmEmailUri}?userId={user.Id}&token={token}";
-            await _emailQueueService.QueueEmailAsync(user.Email, "Xác nhận Email - Gửi lại",
-                $"Vui lòng nhấp <a href=\"{link}\">vào đây</a> để xác nhận tài khoản.");
 
-            return ApiResult<string>.Success("Email xác thực đã được gửi lại.");
+            // Truyền token nguyên bản, để UserEmailService xử lý việc encode
+            await _userEmailService.SendEmailConfirmationAsync(email, user.Id, token, _confirmEmailUri);
+            return ApiResult<string>.Success("Confirmation email resent");
         }
 
         public async Task<ApiResult<string>> InitiatePasswordResetAsync(ForgotPasswordRequestDTO request)
         {
-            var genericResponse = ApiResult<string>.Success(
-                "Nếu email hợp lệ, bạn sẽ nhận được hướng dẫn đặt lại mật khẩu.");
+            if (request == null || string.IsNullOrWhiteSpace(request.Email))
+                return ApiResult<string>.Failure("Invalid email");
 
+            var genericResponse = ApiResult<string>.Success("If the email is valid, you’ll receive password reset instructions");
             var user = await _userManager.FindByEmailAsync(request.Email);
             if (user == null || !await _userManager.IsEmailConfirmedAsync(user))
                 return genericResponse;
 
             var token = await _userManager.GeneratePasswordResetTokenAsync(user);
             var encodedToken = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(token));
-            var resetLink = $"{_resetPasswordUri}?email={Uri.EscapeDataString(request.Email)}&token={encodedToken}";
 
-            await _emailQueueService.QueueEmailAsync(request.Email, "Đặt lại mật khẩu",
-                $"Nhấp <a href=\"{resetLink}\">vào đây</a> để đặt lại mật khẩu.");
-
+            await _userEmailService.SendPasswordResetEmailAsync(request.Email, encodedToken, _resetPasswordUri);
             return genericResponse;
         }
 
         public async Task<ApiResult<string>> ResetPasswordAsync(ResetPasswordRequestDTO request)
         {
+            if (request == null || string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Token) || string.IsNullOrWhiteSpace(request.NewPassword))
+                return ApiResult<string>.Failure("Invalid request");
+
             var user = await _userManager.FindByEmailAsync(request.Email);
             if (user == null)
-                return ApiResult<string>.Failure("Yêu cầu không hợp lệ.");
+                return ApiResult<string>.Failure("Invalid request");
 
             string token;
             try
@@ -158,90 +171,85 @@ namespace Services.Implementations
             }
             catch
             {
-                return ApiResult<string>.Failure("Token không hợp lệ.");
+                return ApiResult<string>.Failure("Invalid token");
             }
 
             var result = await _userManager.ResetPasswordAsync(user, token, request.NewPassword);
             if (!result.Succeeded)
-                return ApiResult<string>.Failure("Đặt lại mật khẩu thất bại. Vui lòng thử lại.");
+                return ApiResult<string>.Failure("Password reset failed. Please try again");
 
-            await _emailQueueService.QueueEmailAsync(request.Email, "Mật khẩu đã thay đổi",
-                "Mật khẩu của bạn đã được thay đổi thành công.");
-
-            return ApiResult<string>.Success("Đổi mật khẩu thành công.");
+            await _userEmailService.SendPasswordChangedNotificationAsync(request.Email);
+            return ApiResult<string>.Success("Password reset successfully");
         }
 
         public async Task<ApiResult<string>> Send2FACodeAsync()
         {
             var userId = _currentUserService.GetUserId();
             if (userId == null)
-                return ApiResult<string>.Failure("Người dùng không tồn tại.");
+                return ApiResult<string>.Failure("User not found");
 
             var user = await _userManager.FindByIdAsync(userId);
             if (user == null)
-                return ApiResult<string>.Failure("Người dùng không tồn tại.");
+                return ApiResult<string>.Failure("User not found");
 
             var code = await _userManager.GenerateTwoFactorTokenAsync(user, TokenOptions.DefaultEmailProvider);
-            await _emailQueueService.QueueEmailAsync(user.Email, "Mã xác thực 2FA", $"Mã của bạn là: {code}");
-
-            return ApiResult<string>.Success("Mã 2FA đã được gửi.");
+            await _userEmailService.Send2FACodeAsync(user.Email, code);
+            return ApiResult<string>.Success("2FA code sent");
         }
 
         public async Task<ApiResult<UserResponse>> AdminRegisterAsync(AdminCreateUserRequest req)
         {
+            if (req == null || string.IsNullOrWhiteSpace(req.Email))
+                return ApiResult<UserResponse>.Failure("Invalid request");
+
             if (!_currentUserService.IsAdmin())
-                return ApiResult<UserResponse>.Failure("Forbidden: Only Admins can register users");
+                return ApiResult<UserResponse>.Failure("Forbidden: Only admins can register users");
 
             if (await _userRepository.ExistsByEmailAsync(req.Email))
-                return ApiResult<UserResponse>.Failure("Email đã được sử dụng");
+                return ApiResult<UserResponse>.Failure("Email already in use");
 
-            _logger.LogInformation("AdminRegister user: {Email}", req.Email);
+            _logger.LogInformation("Admin registering user: {Email}", req.Email);
 
             return await _unitOfWork.ExecuteTransactionAsync(async () =>
             {
                 var user = UserMappings.ToDomainUser(req);
-
                 var create = await _userManager.CreateUserAsync(user, req.Password);
                 if (!create.Succeeded)
                     return ApiResult<UserResponse>.Failure(create.ErrorMessage);
 
                 await _userManager.AddRolesAsync(user, req.Roles);
                 var token = await _tokenService.GenerateToken(user);
-
-                return ApiResult<UserResponse>.Success(
-                    await UserMappings.ToUserResponseAsync(user, _userManager, token.Data));
+                return ApiResult<UserResponse>.Success(await UserMappings.ToUserResponseAsync(user, _userManager, token.Data));
             });
         }
 
         public async Task<ApiResult<UserResponse>> LoginAsync(UserLoginRequest req)
         {
+            if (req == null || string.IsNullOrWhiteSpace(req.Email) || string.IsNullOrWhiteSpace(req.Password))
+                return ApiResult<UserResponse>.Failure("Invalid request");
+
             _logger.LogInformation("Login attempt: {Email}", req.Email);
 
             var user = await _userManager.FindByEmailAsync(req.Email);
-            if (user == null)
-                return ApiResult<UserResponse>.Failure("Email hoặc mật khẩu không đúng.");
-
-            if (!await _userManager.CheckPasswordAsync(user, req.Password))
+            if (user == null || !await _userManager.CheckPasswordAsync(user, req.Password))
             {
-                await _userManager.AccessFailedAsync(user);
-                return ApiResult<UserResponse>.Failure("Email hoặc mật khẩu không đúng.");
+                if (user != null) await _userManager.AccessFailedAsync(user);
+                return ApiResult<UserResponse>.Failure("Invalid email or password");
             }
 
             if (!await _userManager.IsEmailConfirmedAsync(user))
-                return ApiResult<UserResponse>.Failure("Vui lòng xác nhận email trước khi đăng nhập.");
+                return ApiResult<UserResponse>.Failure("Please confirm your email before logging in");
 
             if (await _userManager.IsLockedOutAsync(user))
-                return ApiResult<UserResponse>.Failure("Tài khoản bị khóa.");
+                return ApiResult<UserResponse>.Failure("Account is locked");
 
             await _userManager.ResetAccessFailedAsync(user);
 
-            // Thực hiện tuần tự các tác vụ
-            var token = await _tokenService.GenerateToken(user); // Sinh token trước
-            var refreshToken = _tokenService.GenerateRefreshToken(); // Sinh refresh token
-            await _userManager.SetAuthenticationTokenAsync(user, "MyApp", "RefreshToken", refreshToken); // Lưu refresh token
+            var token = await _tokenService.GenerateToken(user);
+            var refreshToken = _tokenService.GenerateRefreshToken();
+            await _userManager.SetAuthenticationTokenAsync(user, "MyApp", "RefreshToken", refreshToken);
 
-            var userResponse = await UserMappings.ToUserResponseAsync(user, _userManager, token.Data, refreshToken);
-            return ApiResult<UserResponse>.Success(userResponse);
+            return ApiResult<UserResponse>.Success(await UserMappings.ToUserResponseAsync(user, _userManager, token.Data, refreshToken));
         }
 
         public async Task<ApiResult<UserResponse>> GetByIdAsync(Guid id)
@@ -250,37 +258,49 @@ namespace Services.Implementations
             if (userDetails == null)
                 return ApiResult<UserResponse>.Failure("User not found");
 
-            return ApiResult<UserResponse>.Success(
-                await UserMappings.ToUserResponseAsync(userDetails, _userManager));
+            return ApiResult<UserResponse>.Success(await UserMappings.ToUserResponseAsync(userDetails, _userManager));
         }
 
         public async Task<ApiResult<CurrentUserResponse>> GetCurrentUserAsync()
         {
             var uid = _currentUserService.GetUserId();
+            if (uid == null)
+                return ApiResult<CurrentUserResponse>.Failure("User not found");
+
             var user = await _userManager.FindByIdAsync(uid);
             if (user == null)
                 return ApiResult<CurrentUserResponse>.Failure("User not found");
 
             var token = await _tokenService.GenerateToken(user);
-            return ApiResult<CurrentUserResponse>.Success(
-                UserMappings.ToCurrentUserResponse(user, token.Data));
+            return ApiResult<CurrentUserResponse>.Success(UserMappings.ToCurrentUserResponse(user, token.Data));
         }
 
         public async Task<ApiResult<CurrentUserResponse>> RefreshTokenAsync(RefreshTokenRequest req)
         {
+            if (req == null || string.IsNullOrWhiteSpace(req.RefreshToken))
+                return ApiResult<CurrentUserResponse>.Failure("Invalid request");
+
             var uid = _currentUserService.GetUserId();
+            if (uid == null)
+                return ApiResult<CurrentUserResponse>.Failure("User not found");
+
             var user = await _userManager.FindByIdAsync(uid);
             if (user == null || !await _userManager.ValidateRefreshTokenAsync(user, req.RefreshToken))
                 return ApiResult<CurrentUserResponse>.Failure("Invalid refresh token");
 
             var token = await _tokenService.GenerateToken(user);
-            return ApiResult<CurrentUserResponse>.Success(
-                UserMappings.ToCurrentUserResponse(user, token.Data));
+            return ApiResult<CurrentUserResponse>.Success(UserMappings.ToCurrentUserResponse(user, token.Data));
         }
 
         public async Task<ApiResult<RevokeRefreshTokenResponse>> RevokeRefreshTokenAsync(RefreshTokenRequest req)
         {
+            if (req == null || string.IsNullOrWhiteSpace(req.RefreshToken))
+                return ApiResult<RevokeRefreshTokenResponse>.Failure("Invalid request");
+
             var uid = _currentUserService.GetUserId();
+            if (uid == null)
+                return ApiResult<RevokeRefreshTokenResponse>.Failure("User not found");
+
             var user = await _userManager.FindByIdAsync(uid);
             if (user == null || !await _userManager.ValidateRefreshTokenAsync(user, req.RefreshToken))
                 return ApiResult<RevokeRefreshTokenResponse>.Failure("Invalid refresh token");
@@ -289,13 +309,18 @@ namespace Services.Implementations
             if (!rem.Succeeded)
                 return ApiResult<RevokeRefreshTokenResponse>.Failure(rem.ErrorMessage);
 
-            return ApiResult<RevokeRefreshTokenResponse>.Success(
-                new RevokeRefreshTokenResponse { Message = "Revoked" });
+            return ApiResult<RevokeRefreshTokenResponse>.Success(new RevokeRefreshTokenResponse { Message = "Revoked" });
         }
 
         public async Task<ApiResult<string>> ChangePasswordAsync(ChangePasswordRequest req)
         {
+            if (req == null || string.IsNullOrWhiteSpace(req.OldPassword) || string.IsNullOrWhiteSpace(req.NewPassword))
+                return ApiResult<string>.Failure("Invalid request");
+
             var uid = _currentUserService.GetUserId();
+            if (uid == null)
+                return ApiResult<string>.Failure("User not found");
+
             var user = await _userManager.FindByIdAsync(uid);
             if (user == null)
                 return ApiResult<string>.Failure("User not found");
@@ -305,11 +330,15 @@ namespace Services.Implementations
                 return ApiResult<string>.Failure(res.ErrorMessage);
 
             await _userManager.UpdateSecurityStampAsync(user);
-            return ApiResult<string>.Success("Password changed");
+            await _userEmailService.SendPasswordChangedNotificationAsync(user.Email);
+            return ApiResult<string>.Success("Password changed successfully");
         }
 
         public async Task<ApiResult<UserResponse>> UpdateAsync(Guid id, UpdateUserRequest req)
         {
+            if (req == null)
+                return ApiResult<UserResponse>.Failure("Invalid request");
+
             var user = await _userManager.FindByIdAsync(id.ToString());
             if (user == null)
                 return ApiResult<UserResponse>.Failure("User not found");
@@ -320,23 +349,25 @@ namespace Services.Implementations
                 user.UpdateAt = DateTime.UtcNow;
 
                 if (req.Roles?.Any() == true && _currentUserService.IsAdmin())
-                {
                     await _userManager.UpdateRolesAsync(user, req.Roles);
-                }
 
                 var upd = await _userManager.UpdateAsync(user);
                 if (!upd.Succeeded)
-                    return ApiResult<UserResponse>.Failure(
-                        string.Join(", ", upd.Errors.Select(e => e.Description)));
+                    return ApiResult<UserResponse>.Failure(string.Join(", ", upd.Errors.Select(e => e.Description)));
 
-                return ApiResult<UserResponse>.Success(
-                    await UserMappings.ToUserResponseAsync(user, _userManager));
+                return ApiResult<UserResponse>.Success(await UserMappings.ToUserResponseAsync(user, _userManager));
             });
         }
 
         public async Task<ApiResult<UserResponse>> UpdateCurrentUserAsync(UpdateUserRequest req)
         {
+            if (req == null)
+                return ApiResult<UserResponse>.Failure("Invalid request");
+
             var uid = _currentUserService.GetUserId();
+            if (uid == null)
+                return ApiResult<UserResponse>.Failure("User not found");
+
             var user = await _userManager.FindByIdAsync(uid);
             if (user == null)
                 return ApiResult<UserResponse>.Failure("User not found");
@@ -348,11 +379,9 @@ namespace Services.Implementations
 
                 var upd = await _userManager.UpdateAsync(user);
                 if (!upd.Succeeded)
-                    return ApiResult<UserResponse>.Failure(
-                        string.Join(", ", upd.Errors.Select(e => e.Description)));
+                    return ApiResult<UserResponse>.Failure(string.Join(", ", upd.Errors.Select(e => e.Description)));
 
-                return ApiResult<UserResponse>.Success(
-                    await UserMappings.ToUserResponseAsync(user, _userManager));
+                return ApiResult<UserResponse>.Success(await UserMappings.ToUserResponseAsync(user, _userManager));
             });
         }
 
@@ -360,7 +389,7 @@ namespace Services.Implementations
             ChangeLockoutAsync(id, true, DateTimeOffset.MaxValue);
 
         public Task<ApiResult<UserResponse>> UnlockUserAsync(Guid id) =>
-            ChangeLockoutAsync(id, true, DateTimeOffset.UtcNow);
+            ChangeLockoutAsync(id, false, DateTimeOffset.UtcNow);
 
         private async Task<ApiResult<UserResponse>> ChangeLockoutAsync(Guid id, bool enable, DateTimeOffset until)
         {
@@ -372,8 +401,7 @@ namespace Services.Implementations
             if (!res.Succeeded)
                 return ApiResult<UserResponse>.Failure(res.ErrorMessage);
 
-            return ApiResult<UserResponse>.Success(
-                await UserMappings.ToUserResponseAsync(user, _userManager));
+            return ApiResult<UserResponse>.Success(await UserMappings.ToUserResponseAsync(user, _userManager));
         }
 
         public async Task<ApiResult<object>> DeleteUsersAsync(List<Guid> ids)
@@ -391,8 +419,7 @@ namespace Services.Implementations
 
                     var del = await _userManager.DeleteAsync(user);
                     if (!del.Succeeded)
-                        return ApiResult<object>.Failure(
-                            string.Join(", ", del.Errors.Select(e => e.Description)));
+                        return ApiResult<object>.Failure(string.Join(", ", del.Errors.Select(e => e.Description)));
                 }
                 return ApiResult<object>.Success(null);
             });
@@ -400,6 +427,9 @@ namespace Services.Implementations
 
         public async Task<UserResponse> CreateOrUpdateGoogleUserAsync(GoogleUserInfo info)
         {
+            if (info == null || string.IsNullOrWhiteSpace(info.Email))
+                return null;
+
             var user = await _userManager.FindByEmailAsync(info.Email);
             var isNew = user == null;
 
@@ -414,8 +444,7 @@ namespace Services.Implementations
             }
             else
             {
-                var tasks = new List<Task>(2);
-
+                var tasks = new List<Task>();
                 if (!await _userManager.IsInRoleAsync(user, "USER"))
                     tasks.Add(_userManager.AddDefaultRoleAsync(user));
 
@@ -428,17 +457,16 @@ namespace Services.Implementations
 
             var tokenTask = _tokenService.GenerateToken(user);
             var refresh = _tokenService.GenerateRefreshToken();
-
-            await Task.WhenAll(
-                tokenTask,
-                _userManager.SetRefreshTokenAsync(user, refresh)
-            );
+            await Task.WhenAll(tokenTask, _userManager.SetRefreshTokenAsync(user, refresh));
 
             return await UserMappings.ToUserResponseAsync(user, _userManager, tokenTask.Result.Data, refresh);
         }
 
         public async Task<ApiResult<PagedList<UserDetailsDTO>>> GetUsersAsync(int page, int size)
         {
+            if (page < 1 || size < 1)
+                return ApiResult<PagedList<UserDetailsDTO>>.Failure("Invalid pagination parameters");
+
             var list = await _userRepository.GetUserDetailsAsync(page, size);
             return ApiResult<PagedList<UserDetailsDTO>>.Success(list);
         }

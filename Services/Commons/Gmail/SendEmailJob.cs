@@ -8,8 +8,6 @@ namespace Services.Commons.Gmail
         private readonly IEmailQueueService _emailQueueService;
         private readonly ILogger<SendEmailJob> _logger;
 
-        // Thêm các dependency khác nếu cần, như DbContext để lấy email từ database
-
         public SendEmailJob(IEmailQueueService emailQueueService, ILogger<SendEmailJob> logger)
         {
             _emailQueueService = emailQueueService;
@@ -22,11 +20,6 @@ namespace Services.Commons.Gmail
 
             try
             {
-                // Ở đây bạn có thể thêm logic để lấy email từ database hoặc từ nguồn dữ liệu khác
-                // Ví dụ:
-                // var emails = await _dbContext.Users.Where(u => u.RoleName == "APPROVER").Select(u => u.Email).ToListAsync();
-
-                // Mẫu code sử dụng danh sách cứng để minh họa
                 var emails = new List<string> { "approver1@example.com", "approver2@example.com" };
                 var subject = "Daily Reminder: Pending Approvals";
                 var message = GenerateReminderEmailBody();
@@ -49,7 +42,6 @@ namespace Services.Commons.Gmail
 
         private string GenerateReminderEmailBody()
         {
-            // Logic để tạo nội dung email
             return @"
                 <html>
                 <body>
