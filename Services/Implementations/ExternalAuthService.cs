@@ -1,6 +1,6 @@
 ﻿using System.Security.Claims;
 using Google.Apis.Auth;
-using Microsoft.AspNetCore.Http;     
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Configuration;
@@ -36,13 +36,21 @@ public class ExternalAuthService : IExternalAuthService
     {
         try
         {
+            Console.WriteLine($"Using Client ID: {_configuration["Authentication:Google:ClientId"]}");
+
             // Validate Google token with correct settings
+            //ID Token bạn đang dán lên Swagger là của OAuth Playground, không phải do Web Client của bạn cấp.
             var validationSettings = new GoogleJsonWebSignature.ValidationSettings
             {
-                Audience = new[] { _configuration["Authentication:Google:ClientId"] }
+                Audience = new[] {
+                    _configuration["Authentication:Google:ClientId"],           // web client của bạn
+                    "407408718192.apps.googleusercontent.com"                  // client-id của OAuth Playground
+                }
             };
 
             var payload = await GoogleJsonWebSignature.ValidateAsync(tokenId, validationSettings);
+
+            Console.WriteLine($"Token audience: {payload.Audience}");
 
             // Continue with user creation/login after successful validation
             var googleInfo = new GoogleUserInfo
@@ -86,6 +94,11 @@ public class ExternalAuthService : IExternalAuthService
         }
         catch (Exception ex)
         {
+            Console.WriteLine($"Google authentication error: {ex.Message}");
+            if (ex is InvalidJwtException jwtEx)
+            {
+                Console.WriteLine($"JWT Error details: {jwtEx.Message}");
+            }
             return ApiResult<UserResponse>.Failure($"Google authentication failed: {ex.Message}");
         }
     }
