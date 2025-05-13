@@ -2,13 +2,13 @@
 
 // 1) Đăng ký toàn bộ hạ tầng + controllers
 builder.Services
-       .AddInfrastructure(builder.Configuration)
-       .AddSwaggerServices();
+      .AddInfrastructure(builder.Configuration)
+      .AddSwaggerServices();
 
 var app = builder.Build();
 
 // 2) Áp dụng pipeline (migrations, routing, auth, map controllers…) và swagger
-app.UseApplicationPipeline()
-   .UseSwaggerPipeline();
+var applicationBuilder = await app.UseApplicationPipeline();
+applicationBuilder.UseSwaggerPipeline();
 
 app.Run();

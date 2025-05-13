@@ -4,7 +4,7 @@ namespace WebAPI.Extensions
 {
     public static class PipelineConfigurationExtensions
     {
-        public static IApplicationBuilder UseApplicationPipeline(this IApplicationBuilder app)
+        public static async Task<IApplicationBuilder> UseApplicationPipeline(this IApplicationBuilder app)
         {
             // 1. Chuẩn bị scope để migrate DB & Swagger
             var scopeFactory = app.ApplicationServices.GetRequiredService<IServiceScopeFactory>();
@@ -13,11 +13,12 @@ namespace WebAPI.Extensions
                 var env = scope.ServiceProvider.GetRequiredService<IWebHostEnvironment>();
                 var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
                 var db = scope.ServiceProvider.GetRequiredService<BaseIdentityDbContext>();
-
+                var userManager = scope.ServiceProvider.GetRequiredService<UserManager<User>>();
                 try
                 {
                     db.Database.Migrate();
                     // nếu cần: await DBInitializer.Initialize(db);
+                    await DBInitializer.Initialize(db, userManager);
                 }
                 catch (Exception ex)
                 {
